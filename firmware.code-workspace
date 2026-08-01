@@ -1,10 +1,16 @@
 {
 	"folders": [
-		{	
-			"name": "firmware",
-			"path": "firmware"
+		{
+			"path": "."
+		},
+		{
+			"name": "cam-main",
+			"path": "cam-main"
+		},
+		{
+			"name": "dual-cam-s3-alpha",
+			"path": "dual-cam-s3-alpha"
 		}
-
 	],
 	"settings": {}
 }
