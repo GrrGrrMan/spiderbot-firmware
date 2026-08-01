@@ -26,4 +26,5 @@ local_config*.h
 !.vscode/extensions.json
 .DS_Store
 Thumbs.db
-cam-main/wokwi.vcd
+*.vcd
+
