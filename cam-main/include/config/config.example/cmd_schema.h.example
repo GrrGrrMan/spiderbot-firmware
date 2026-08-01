@@ -1,0 +1,6 @@
+#pragma once
+
+#define CMD_TYPE_SERVO "servo"
+#define CMD_TYPE_SERVO_BATCH "servo_batch"
+#define CMD_TYPE_MOTION "motion"
+#define CMD_TYPE_SYSTEM "system"

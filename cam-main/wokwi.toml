@@ -1,0 +1,10 @@
+[wokwi]
+version = 1
+firmware = '.pio/build/esp32cam/firmware.bin'
+elf = '.pio/build/esp32cam/firmware.elf'
+
+
+
+[[chip]]
+name = "pca9685"
+binary = "pca9685.wasm"

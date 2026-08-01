@@ -1,0 +1,32 @@
+#pragma once
+
+#include <Arduino.h>
+
+#define DEVICE_ID "hexapod-cam-01"
+
+struct WifiCredential {
+    const char* ssid;
+    const char* pass;
+    bool isHotspot; // High priority flag for Raspberry Pi Hotspot
+};
+
+// Listed in order of preference (RPi Hotspot first, then Home, Workshop, etc.)
+const WifiCredential KNOWN_NETWORKS[] = {
+    {"spiderlink",        "spider",             true},   // Priority 1: Pi Hotspot
+    {"YourHomeWiFiSSID",  "YourHomeWiFiPassword", false}, // Priority 2: Home
+    {"WorkshopWiFi",      "WorkshopPassword",    false}, // Priority 3: Workshop
+    {"PhoneHotspot",      "HotspotPassword",     false}  // Priority 4: Phone
+};
+
+const size_t KNOWN_NETWORKS_COUNT = sizeof(KNOWN_NETWORKS) / sizeof(KNOWN_NETWORKS[0]);
+
+// ── MQTT 2-Channel Pipe Settings ──────────────────────────────────────────
+#define MQTT_BROKER_IP    "192.168.4.1"   // Gateway IP on RPi Hotspot
+#define MQTT_BROKER_PORT  1883
+
+#define MQTT_TOPIC_CMD    "hexapod/cmd"        // Downstream (Pi -> ESP)
+#define MQTT_TOPIC_TEL    "hexapod/telemetry"  // Upstream   (ESP -> Pi)
+
+// ── Fallback Access Point ──────────────────────────────────────────────────
+#define FALLBACK_AP_SSID  "cam-fallback"
+#define FALLBACK_AP_PASS  "spider"

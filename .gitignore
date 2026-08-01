@@ -13,11 +13,7 @@ local_config*.h
 .pio/
 .piohome/
 .cache/
-bin/
-*.bin
 *.elf
-*.md5
-dual-cam-s3-alpha/bin/
 
 # Auto-generated Intellisense
 .vscode/c_cpp_properties.json

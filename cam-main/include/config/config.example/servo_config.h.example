@@ -1,0 +1,21 @@
+#pragma once
+
+// Hardware Pins (ESP32-CAM SD Bus repurposed)
+#define PIN_PCA_SDA 15
+#define PIN_PCA_SCL 14
+#define PIN_PCA_OE  13
+
+// Dual PCA9685 I2C Addresses
+#define PCA_ADDR_BOARD_1 0x40 // Default address
+#define PCA_ADDR_BOARD_2 0x41 // A0 jumper bridged
+#define PCA_NUM_BOARDS 2
+
+// PCA9685 Registers
+#define PCA_MODE1       0x00
+#define PCA_PRESCALE    0xFE
+#define PCA_LED0_ON_L   0x06
+
+// Hexapod Specifics
+#define NUM_SERVOS      18  // 3-DOF * 6 legs
+#define SERVO_HOME_TICK 307 // ~1500us at 50Hz (20ms period)
+#define STAGGER_OFFSET  227 // 4096 / 18 ≈ 227 ticks apart to prevent power spikes

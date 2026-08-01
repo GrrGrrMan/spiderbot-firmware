@@ -1,0 +1,38 @@
+{
+  "version": 1,
+  "author": "Hexapod Monorepo",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
+    { "type": "wokwi-logic-analyzer", "id": "logic1", "top": -150, "left": 250, "attrs": {} },
+    { "type": "chip-pca9685", "id": "pca1", "top": 50, "left": 250, "attrs": {} },
+    { "type": "chip-pca9685", "id": "pca2", "top": 250, "left": 250, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo1", "top": 50, "left": 450, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    
+    [ "esp:15", "logic1:D0", "blue", [] ],
+    [ "esp:14", "logic1:D1", "yellow", [] ],
+    [ "esp:13", "logic1:D2", "orange", [] ],
+    [ "esp:GND.1", "logic1:GND", "black", [] ],
+    
+    [ "esp:3V3", "pca1:VCC", "red", [] ],
+    [ "esp:GND.1", "pca1:GND", "black", [] ],
+    [ "esp:15", "pca1:SDA", "blue", [] ],
+    [ "esp:14", "pca1:SCL", "yellow", [] ],
+    [ "esp:13", "pca1:OE", "orange", [] ],
+    
+    [ "esp:3V3", "pca2:VCC", "red", [] ],
+    [ "esp:GND.1", "pca2:GND", "black", [] ],
+    [ "esp:15", "pca2:SDA", "blue", [] ],
+    [ "esp:14", "pca2:SCL", "yellow", [] ],
+    [ "esp:13", "pca2:OE", "orange", [] ],
+    [ "esp:3V3", "pca2:A0", "green", [] ],
+
+    [ "pca1:PWM0", "servo1:PWM", "orange", [] ],
+    [ "esp:GND.1", "servo1:GND", "black", [] ],
+    [ "esp:5V", "servo1:V+", "red", [] ]
+  ]
+}

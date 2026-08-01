@@ -1,0 +1,28 @@
+#pragma once
+
+#include <Arduino.h>
+
+struct OtaSourceConfig {
+    const char* owner;
+    const char* repo;
+    const char* branch;
+    const char* artifactName;
+    bool isPrivate;          // true = Attach Bearer Token; false = Public (Skip Auth)
+    const char* authToken;   // PAT Token string or NULL
+};
+
+// Primary Repo Configuration (e.g. Private GitHub)
+#define OTA_PRIMARY_OWNER    "YourOrg"
+#define OTA_PRIMARY_REPO     "hexapod-firmware"
+#define OTA_PRIMARY_BRANCH   "main"
+#define OTA_PRIMARY_ARTIFACT "firmware"
+#define OTA_PRIMARY_PRIVATE  true
+#define OTA_PRIMARY_TOKEN    "github_pat_SECRET_TOKEN"
+
+// Fallback Repo Configuration (e.g. Public GitHub)
+#define OTA_FALLBACK_OWNER    "YourOrg"
+#define OTA_FALLBACK_REPO     "hexapod-firmware-public"
+#define OTA_FALLBACK_BRANCH   "main"
+#define OTA_FALLBACK_ARTIFACT "firmware"
+#define OTA_FALLBACK_PRIVATE  false
+#define OTA_FALLBACK_TOKEN    ""
