@@ -1,0 +1,27 @@
+# Copy values into scripts/workflow/sync_hosts.conf.
+# Keep the real file ignored.
+
+SPIDERBOT_REMOTE_DIR=~/AlphaESPCAM
+SPIDERBOT_SYNC_HOSTS=(
+  spider-j
+  spider-w
+)
+SPIDERBOT_PI_TARGETS=(
+  spider-j
+  spider-w
+)
+
+# For a freshly reset Pi that is not on the tailnet yet, you can skip editing
+# this file and use an ad-hoc target instead:
+#   .\scripts\workflow\sync_workspace.ps1 setup -Target spider@192.168.1.50 -Only spider@192.168.1.50
+#
+# Built-in PowerShell profiles also exist for common names:
+#   -Profile spider-w-local     -> spider@spider-w.local
+#   -Profile spider-w-tailnet   -> spider@spider-w
+# Override a profile target without committing it:
+#   $env:SPIDERBOT_PROFILE_SPIDER_W_LOCAL_TARGET="spider@192.168.1.50"
+#
+# Tailscale setup uses browser/manual auth by default:
+#   .\scripts\workflow\sync_workspace.ps1 tailscale-auth -Profile spider-w-local
+# If you use an auth key, set TS_AUTHKEY only in the remote shell/popup or Pi
+# environment; do not paste it into committed files or command examples.

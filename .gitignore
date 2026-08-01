@@ -1,0 +1,32 @@
+# Credentials & Secrets
+*.env
+**/*.env
+!*.env.example
+!**/*.env.example
+secrets.h
+!secrets.h.example
+**/secrets.h
+!**/secrets.h.example
+local_config*.h
+
+# PlatformIO & C++ Builds
+.pio/
+.piohome/
+.cache/
+bin/
+*.bin
+*.elf
+*.md5
+dual-cam-s3-alpha/bin/
+
+# Auto-generated Intellisense
+.vscode/c_cpp_properties.json
+
+# IDE & System
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
