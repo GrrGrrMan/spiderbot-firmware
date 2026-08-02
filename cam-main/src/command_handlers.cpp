@@ -1,0 +1,111 @@
+#include "command_handlers.h"
+#include "cmd_schema.h"
+#include "servo_config.h"
+#include "logger.h"
+
+void registerAllCommandHandlers(
+    CommandDispatcher& dispatcher,
+    ServoManager& servoMgr,
+    OTAManager& otaMgr,
+    MotionController& motionCtrl
+) {
+    // 1. Single Servo Direct Write Handler
+    dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr](const JsonDocument& doc) {
+        uint8_t ch = doc["channel"] | 0;
+        uint16_t pulseUs = doc["pulse_us"] | 1500;
+        
+        uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
+        uint16_t widthTicks = (pulseUs * 4096UL) / 20000UL;
+        uint16_t offTick = (onTick + widthTicks) % 4096;
+        
+        servoMgr.setPWM(ch, onTick, offTick);
+        LOG_MOT("Direct Servo Write: Ch %d -> %d us (On:%d Off:%d)", ch, pulseUs, onTick, offTick);
+    });
+
+    // 2. Batch Servo Direct Write Handler
+    dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr](const JsonDocument& doc) {
+        JsonArrayConst servos = doc["servos"].as<JsonArrayConst>();
+        for (JsonObjectConst s : servos) {
+            uint8_t ch = s["ch"] | 0;
+            uint16_t pulseUs = s["pulse_us"] | 1500;
+            
+            uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
+            uint16_t widthTicks = (pulseUs * 4096UL) / 20000UL;
+            uint16_t offTick = (onTick + widthTicks) % 4096;
+            
+            servoMgr.setPWM(ch, onTick, offTick);
+        }
+    });
+    // 3. Motion Engine Handler (Velocity Vectors & 6-DOF Body Poses)
+    dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl](const JsonDocument& doc) {
+        // Check for Gait Mode Switch ("tripod", "ripple", "wave")
+        if (doc["gait"].is<const char*>()) {
+            String gaitStr = doc["gait"].as<String>();
+            gaitStr.toLowerCase();
+            if (gaitStr == "ripple") {
+                motionCtrl.setGaitType(GaitType::RIPPLE);
+                LOG_MOT("Gait switched to: RIPPLE");
+            } else if (gaitStr == "wave") {
+                motionCtrl.setGaitType(GaitType::WAVE);
+                LOG_MOT("Gait switched to: WAVE");
+            } else {
+                motionCtrl.setGaitType(GaitType::TRIPOD);
+                LOG_MOT("Gait switched to: TRIPOD");
+            }
+        }
+
+        // Process Velocity Vector Command
+        if (doc["vx"].is<float>() || doc["vy"].is<float>() || doc["omega"].is<float>() || doc["leg_stance"].is<float>()) {
+            VelocityCommand vCmd;
+            vCmd.vx         = doc["vx"]          | 0.0f;
+            vCmd.vy         = doc["vy"]          | 0.0f;
+            vCmd.omega      = doc["omega"]       | 0.0f;
+            vCmd.stepHeight = doc["step_height"] | 25.0f;
+            vCmd.cycleTime  = doc["cycle_time"]  | 1.0f;
+            vCmd.legStance  = doc["leg_stance"]  | 0.0f;
+            vCmd.hipStance  = doc["hip_stance"]  | 0.0f;
+            motionCtrl.setVelocity(vCmd);
+            LOG_MOT("Velocity Cmd: Vx=%.1f, Vy=%.1f, W=%.1f, LegStance=%.1f, HipStance=%.1f", 
+                    vCmd.vx, vCmd.vy, vCmd.omega, vCmd.legStance, vCmd.hipStance);
+        }
+
+        // Process Body Pose Command
+        if (doc["roll"].is<float>() || doc["pitch"].is<float>() || doc["pos_z"].is<float>()) {
+            BodyPose pose;
+            pose.posX  = doc["pos_x"] | 0.0f;
+            pose.posY  = doc["pos_y"] | 0.0f;
+            pose.posZ  = doc["pos_z"] | 0.0f;
+            pose.roll  = doc["roll"]  | 0.0f;
+            pose.pitch = doc["pitch"] | 0.0f;
+            pose.yaw   = doc["yaw"]   | 0.0f;
+            motionCtrl.setBodyPose(pose);
+            LOG_MOT("Pose Cmd: Roll=%.1f, Pitch=%.1f, Yaw=%.1f", pose.roll, pose.pitch, pose.yaw);
+        }
+    });
+    
+    // 4. System Logging Handler
+    dispatcher.registerHandler(CMD_TYPE_SYSTEM, [](const JsonDocument& doc) {
+        if (doc["logging"].is<bool>()) {
+            g_logEnabled = doc["logging"].as<bool>();
+            LOG_SYS("Logging state: %d", g_logEnabled);
+        }
+    });
+
+    // 5. OTA Update Handler
+    dispatcher.registerHandler(CMD_TYPE_OTA, [&otaMgr](const JsonDocument& doc) {
+        bool forceFallback = doc["fallback"]     | false;
+        bool forcePrimary  = doc["primary"]      | false;
+
+        String customOwner = doc["owner"]        | "";
+        String customRepo  = doc["repo"]         | "";
+        String customBranch= doc["branch"]       | "";
+        String customPath  = doc["project_path"] | "";
+        String customPat   = doc["pat"]          | "";
+
+        LOG_SYS("Remote OTA command received via MQTT!");
+        otaMgr.checkForUpdates(
+            forcePrimary, forceFallback,
+            customOwner, customRepo, customBranch, customPath, customPat
+        );
+    });
+}

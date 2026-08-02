@@ -3,13 +3,15 @@
 #include <Arduino.h>
 
 struct OtaSourceConfig {
-    const char* owner;
-    const char* repo;
-    const char* branch;
-    const char* artifactName;
-    bool isPrivate;          // true = Attach Bearer Token; false = Public (Skip Auth)
-    const char* authToken;   // PAT Token string or NULL
+    String owner;
+    String repo;
+    String branch;
+    String projectPath;
+    String artifactName;
+    bool isPrivate;
+    String authToken;
 };
+
 
 // Primary Repo Configuration (e.g. Private GitHub)
 #define OTA_PRIMARY_OWNER    "YourOrg"

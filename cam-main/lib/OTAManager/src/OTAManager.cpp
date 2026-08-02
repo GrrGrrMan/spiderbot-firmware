@@ -10,11 +10,6 @@
 OTAManager otaManager;
 static volatile bool s_otaRunning = false;
 
-struct TaskParams {
-    bool forcePrimary;
-    bool forceFallback;
-};
-
 OTAManager::OTAManager() {}
 
 void OTAManager::begin() {
@@ -36,13 +31,22 @@ void OTAManager::validateBootImage() {
     }
 }
 
-void OTAManager::checkForUpdates(bool forcePrimary, bool forceFallback) {
+void OTAManager::checkForUpdates(
+    bool forcePrimary, bool forceFallback,
+    const String& customOwner, const String& customRepo,
+    const String& customBranch, const String& customPath,
+    const String& customPat
+) {
     if (s_otaRunning) {
         LOG_ERR("OTA check already in progress.");
         return;
     }
 
-    TaskParams* params = new TaskParams{forcePrimary, forceFallback};
+    TaskParams* params = new TaskParams{
+        forcePrimary, forceFallback,
+        customOwner, customRepo, customBranch, customPath, customPat
+    };
+    
     s_otaRunning = true;
     
     xTaskCreate([](void* p) {
@@ -73,28 +77,31 @@ bool OTAManager::ensureTlsTime() {
 }
 
 bool OTAManager::fetchAndFlash(const OtaSourceConfig& config) {
-    // Constructs: https://raw.githubusercontent.com/YourOrg/hexapod-firmware/main/cam-main/bin/firmware
-    String baseUrl = String("https://raw.githubusercontent.com/") + 
-                     config.owner + "/" + 
-                     config.repo + "/" + 
-                     config.branch + "/" + 
-                     config.projectPath + 
-                     config.artifactName;
+    String relativePath = config.projectPath + config.artifactName;
+    String hashUrl, binUrl;
 
-    String hashUrl = baseUrl + ".md5"; // .../cam-main/bin/firmware.md5
-    String binUrl  = baseUrl + ".bin"; // .../cam-main/bin/firmware.bin
+    if (config.isPrivate) {
+        // Official GitHub REST API v3 endpoint for Private Repositories
+        String apiBase = "https://api.github.com/repos/" + config.owner + "/" + config.repo + "/contents/" + relativePath;
+        hashUrl = apiBase + ".md5?ref=" + config.branch;
+        binUrl  = apiBase + ".bin?ref=" + config.branch;
+    } else {
+        // Standard Raw URL for Public Repositories
+        String rawBase = "https://raw.githubusercontent.com/" + config.owner + "/" + config.repo + "/" + config.branch + "/" + relativePath;
+        hashUrl = rawBase + ".md5";
+        binUrl  = rawBase + ".bin";
+    }
 
-    LOG_SYS("Checking OTA Source: %s (%s)", baseUrl.c_str(), config.isPrivate ? "PRIVATE" : "PUBLIC");
-
+    LOG_SYS("Checking OTA Source: %s (%s)", hashUrl.c_str(), config.isPrivate ? "PRIVATE" : "PUBLIC");
 
     WiFiClientSecure client;
-    client.setInsecure(); // Skip strict CA checking for lightweight memory usage
+    client.setInsecure(); // Skip strict SSL cert validation for memory efficiency
     HTTPClient http;
 
     // 1. Fetch Remote MD5 Hash
     if (!http.begin(client, hashUrl)) return false;
-    if (config.isPrivate && config.authToken && strlen(config.authToken) > 0) {
-        http.addHeader("Authorization", String("Bearer ") + config.authToken);
+    if (config.isPrivate && !config.authToken.isEmpty()) {
+        http.addHeader("Authorization", "Bearer " + config.authToken);
     }
     http.addHeader("Accept", "application/vnd.github.raw");
 
@@ -121,8 +128,8 @@ bool OTAManager::fetchAndFlash(const OtaSourceConfig& config) {
 
     // 3. Stream and Flash `.bin` Payload
     if (!http.begin(client, binUrl)) return false;
-    if (config.isPrivate && config.authToken && strlen(config.authToken) > 0) {
-        http.addHeader("Authorization", String("Bearer ") + config.authToken);
+    if (config.isPrivate && !config.authToken.isEmpty()) {
+        http.addHeader("Authorization", "Bearer " + config.authToken);
     }
     http.addHeader("Accept", "application/vnd.github.raw");
 
@@ -195,14 +202,31 @@ void OTAManager::otaTask(void* pvParameters) {
         .authToken    = OTA_FALLBACK_TOKEN
     };
 
-    // Auto-Failover Logic
+    // Detect if the user passed explicit custom overrides
+    bool isCustomRequest = !params->customOwner.isEmpty() ||
+                           !params->customRepo.isEmpty()  ||
+                           !params->customBranch.isEmpty()||
+                           !params->customPath.isEmpty()  ||
+                           !params->customPat.isEmpty();
+
+    // Apply Dynamic Overrides
+    if (!params->customOwner.isEmpty())  primary.owner = params->customOwner;
+    if (!params->customRepo.isEmpty())   primary.repo  = params->customRepo;
+    if (!params->customBranch.isEmpty()) primary.branch = params->customBranch;
+    if (!params->customPath.isEmpty())   primary.projectPath = params->customPath;
+    if (!params->customPat.isEmpty())    primary.authToken = params->customPat;
+
+    // Execution Logic
     if (params->forceFallback) {
         fetchAndFlash(fallback);
     } else {
         bool success = fetchAndFlash(primary);
-        if (!success && !params->forcePrimary) {
+        
+        if (!success && !params->forcePrimary && !isCustomRequest) {
             LOG_SYS("Primary OTA failed. Triggering automatic failover to Fallback Repo...");
             fetchAndFlash(fallback);
+        } else if (!success && isCustomRequest) {
+            LOG_ERR("Custom OTA target failed. Aborting execution");
         }
     }
 }

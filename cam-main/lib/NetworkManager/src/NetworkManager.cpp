@@ -1,116 +1,79 @@
 #include "NetworkManager.h"
 #include "net_config.h"
 #include "logger.h"
-#include <WiFi.h>
 
-NetworkManager::NetworkManager() 
-    : m_state(NetState::IDLE),
-      m_lastRetryMs(0),
-      m_targetNetIndex(-1),
-      m_connectAttempts(0),
+NetworkManager::NetworkManager()
+    : m_connected(false),
       m_isHotspot(false),
-      m_mqttBroker("pi-hub.local") {}
+      m_mqttBroker(nullptr) {}
 
 void NetworkManager::begin() {
     WiFi.mode(WIFI_STA);
-    WiFi.setAutoReconnect(false);
+    WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
-    
-    LOG_NET("Initializing Network Manager...");
-    startAsyncScan();
-}
 
-void NetworkManager::startAsyncScan() {
-    LOG_NET("Starting async network scan...");
-    WiFi.scanNetworks(true);
-    m_state = NetState::SCANNING;
-}
+    // Register native ESP32 Wi-Fi hardware event listener
+    WiFi.onEvent(NetworkManager::onWiFiEvent);
 
-void NetworkManager::processScanResults() {
-    int found = WiFi.scanComplete();
-    if (found == WIFI_SCAN_RUNNING) return;
-
-    if (found < 0) {
-        LOG_NET("Scan failed or returned 0 networks.");
-        WiFi.scanDelete();
-        m_state = NetState::IDLE;
-        return;
-    }
-
-    m_targetNetIndex = -1;
-
+    LOG_NET("Initializing NetworkManager with WiFiMulti...");
     for (size_t i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
-        for (int j = 0; j < found; j++) {
-            if (WiFi.SSID(j) == KNOWN_NETWORKS[i].ssid) {
-                m_targetNetIndex = (int)i;
-                break;
-            }
-        }
-        if (m_targetNetIndex != -1) break;
+        m_wifiMulti.addAP(KNOWN_NETWORKS[i].ssid, KNOWN_NETWORKS[i].pass);
+        LOG_NET("Added AP candidate: '%s'", KNOWN_NETWORKS[i].ssid);
     }
 
-    WiFi.scanDelete();
-
-    if (m_targetNetIndex != -1) {
-        LOG_NET("Match found: '%s'! Connecting...", KNOWN_NETWORKS[m_targetNetIndex].ssid);
-        WiFi.begin(KNOWN_NETWORKS[m_targetNetIndex].ssid, KNOWN_NETWORKS[m_targetNetIndex].pass);
-        m_connectAttempts = 0;
-        m_state = NetState::CONNECTING;
-    } else {
-        LOG_NET("No known networks found in range.");
-        m_state = NetState::IDLE;
-    }
+    // Trigger initial background connection cycle
+    m_wifiMulti.run();
 }
 
 void NetworkManager::update() {
-    switch (m_state) {
-        case NetState::IDLE: {
-            if (WiFi.status() == WL_CONNECTED) {
-                m_state = NetState::CONNECTED;
-            } else if (millis() - m_lastRetryMs >= 10000UL) {
-                m_lastRetryMs = millis();
-                startAsyncScan();
-            }
-            break;
+    if (WiFi.status() == WL_CONNECTED) {
+        if (!m_connected) {
+            m_connected = true;
+            updateBrokerForSSID(WiFi.SSID());
+            LOG_NET("Wi-Fi Connected to '%s'! IP: %s | Broker: %s", 
+                    WiFi.SSID().c_str(), 
+                    WiFi.localIP().toString().c_str(), 
+                    m_mqttBroker ? m_mqttBroker : "none");
         }
+    } else {
+        if (m_connected) {
+            m_connected = false;
+            m_mqttBroker = nullptr;
+            LOG_ERR("Wi-Fi Connection Lost! WiFiMulti background retrying...");
+        }
+        // WiFiMulti handles background scanning, prioritization, and failover
+        m_wifiMulti.run();
+    }
+}
 
-        case NetState::SCANNING: {
-            processScanResults();
-            break;
-        }
+void NetworkManager::updateBrokerForSSID(const String& ssid) {
+    m_isHotspot = false;
+    m_mqttBroker = nullptr;
 
-        case NetState::CONNECTING: {
-            if (WiFi.status() == WL_CONNECTED) {
-                m_state = NetState::CONNECTED;
-                m_isHotspot = KNOWN_NETWORKS[m_targetNetIndex].isHotspot;
-                m_mqttBroker = KNOWN_NETWORKS[m_targetNetIndex].mqttBroker;
-                LOG_NET("Connected to %s! IP: %s", 
-                        KNOWN_NETWORKS[m_targetNetIndex].ssid, 
-                        WiFi.localIP().toString().c_str());
-            } else {
-                m_connectAttempts++;
-                if (m_connectAttempts >= 30) {
-                    LOG_ERR("Failed to connect to %s", KNOWN_NETWORKS[m_targetNetIndex].ssid);
-                    m_state = NetState::IDLE;
-                    m_lastRetryMs = millis();
-                }
-            }
+    for (size_t i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
+        if (ssid.equalsIgnoreCase(KNOWN_NETWORKS[i].ssid)) {
+            m_isHotspot = KNOWN_NETWORKS[i].isHotspot;
+            m_mqttBroker = KNOWN_NETWORKS[i].mqttBroker;
             break;
         }
+    }
+}
 
-        case NetState::CONNECTED: {
-            if (WiFi.status() != WL_CONNECTED) {
-                LOG_ERR("Wi-Fi connection lost!");
-                m_state = NetState::IDLE;
-                m_lastRetryMs = millis();
-            }
+void NetworkManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
+    switch (event) {
+        case ARDUINO_EVENT_WIFI_STA_GOT_IP:
+            LOG_NET("[HW Event] Station GOT_IP");
             break;
-        }
+        case ARDUINO_EVENT_WIFI_STA_DISCONNECTED:
+            LOG_NET("[HW Event] Station DISCONNECTED");
+            break;
+        default:
+            break;
     }
 }
 
 bool NetworkManager::isConnected() const {
-    return (m_state == NetState::CONNECTED) && (WiFi.status() == WL_CONNECTED);
+    return m_connected && (WiFi.status() == WL_CONNECTED);
 }
 
 bool NetworkManager::isHotspot() const {
