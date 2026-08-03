@@ -7,8 +7,10 @@ void registerAllCommandHandlers(
     CommandDispatcher& dispatcher,
     ServoManager& servoMgr,
     OTAManager& otaMgr,
-    MotionController& motionCtrl
+    MotionController& motionCtrl,
+    MQTTManager& mqttMgr
 ) {
+
     // 1. Single Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr](const JsonDocument& doc) {
         uint8_t ch = doc["channel"] | 0;
@@ -28,13 +30,12 @@ void registerAllCommandHandlers(
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
             uint16_t pulseUs = s["pulse_us"] | 1500;
-            
             uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
             uint16_t widthTicks = (pulseUs * 4096UL) / 20000UL;
             uint16_t offTick = (onTick + widthTicks) % 4096;
-            
             servoMgr.setPWM(ch, onTick, offTick);
         }
+        LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
     // 3. Motion Engine Handler (Velocity Vectors & 6-DOF Body Poses)
     dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl](const JsonDocument& doc) {
@@ -84,10 +85,17 @@ void registerAllCommandHandlers(
     });
     
     // 4. System Logging Handler
-    dispatcher.registerHandler(CMD_TYPE_SYSTEM, [](const JsonDocument& doc) {
+    dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr](const JsonDocument& doc) {
         if (doc["logging"].is<bool>()) {
             g_logEnabled = doc["logging"].as<bool>();
             LOG_SYS("Logging state: %d", g_logEnabled);
+        }
+        if (doc["command"].is<const char*>()) {
+            String cmd = doc["command"].as<String>();
+            if (cmd == "get_config") {
+                mqttMgr.sendConfig();
+                LOG_SYS("Configuration handshake published on request.");
+            }
         }
     });
 

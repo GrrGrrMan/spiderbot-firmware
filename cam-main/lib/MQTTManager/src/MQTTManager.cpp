@@ -1,5 +1,6 @@
 #include "MQTTManager.h"
 #include "logger.h"
+#include "cmd_schema.h"
 
 static MQTTManager* s_instance = nullptr;
 
@@ -16,6 +17,8 @@ MQTTManager::MQTTManager()
 }
 
 void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
+    m_configTopic = "hexapod/" + m_deviceId + "/config";
+
     m_deviceId = String(deviceId);
     m_brokerPort = brokerPort;
 
@@ -40,10 +43,12 @@ void MQTTManager::reconnect(const char* brokerHost) {
         m_mqttClient.setServer(m_currentBrokerHost.c_str(), m_brokerPort);
     }
 
-    LOG_NET("Connecting to MQTT Broker at %s:%d...", m_currentBrokerHost.c_str(), m_brokerPort);
+    // Generate unique Client ID using ESP32 MAC address to prevent public broker disconnect collisions
+    String uniqueClientId = m_deviceId + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
+    LOG_NET("Connecting to MQTT Broker at %s:%d as [%s]...", m_currentBrokerHost.c_str(), m_brokerPort, uniqueClientId.c_str());
 
-    if (m_mqttClient.connect(m_deviceId.c_str())) {
-        LOG_NET("MQTT Connected as Client ID: %s", m_deviceId.c_str());
+    if (m_mqttClient.connect(uniqueClientId.c_str())) {
+        LOG_NET("MQTT Connected successfully!");
         m_mqttClient.subscribe(m_cmdTopicGlobal.c_str());
         m_mqttClient.subscribe(m_cmdTopicDevice.c_str());
         LOG_NET("Subscribed to [%s] & [%s]", m_cmdTopicGlobal.c_str(), m_cmdTopicDevice.c_str());
@@ -102,6 +107,23 @@ bool MQTTManager::isConnected() {
     return m_mqttClient.connected();
 }
 
+bool MQTTManager::sendConfig() {
+    if (!m_mqttClient.connected()) return false;
+
+    JsonDocument doc;
+    buildConfigPayload(doc, m_deviceId);
+
+    char buffer[512];
+    size_t bytesWritten = serializeJson(doc, buffer, sizeof(buffer));
+    if (bytesWritten == 0) return false;
+
+    bool success = m_mqttClient.publish(m_configTopic.c_str(), (const uint8_t*)buffer, bytesWritten, true);
+    if (success) {
+        LOG_NET("Retained hardware configuration published to [%s]", m_configTopic.c_str());
+    }
+    return success;
+}
+
 void MQTTManager::onMqttMessage(char* topic, byte* payload, unsigned int length) {
     if (!s_instance) return;
 
@@ -119,3 +141,4 @@ void MQTTManager::onMqttMessage(char* topic, byte* payload, unsigned int length)
         s_instance->m_cmdCallback(String(type), doc);
     }
 }
+

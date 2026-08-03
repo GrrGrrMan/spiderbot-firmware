@@ -31,7 +31,7 @@ void setup() {
     otaManager.begin();
 
     // Register handlers passing the motion controller reference
-    registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController);
+    registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController, mqttManager);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
         cmdDispatcher.dispatch(type, doc);
@@ -62,11 +62,12 @@ void TaskNetwork(void *pvParameters) {
             if (!s_bootValidated) {
                 s_bootValidated = true;
                 otaManager.validateBootImage();
+                mqttManager.sendConfig();
             }
 
-            // Drain log queue to MQTT
+            // Drain 1 log entry per network cycle to prevent TCP socket saturation
             LogEntry entry;
-            while (g_logSink.pop(entry)) {
+            if (g_logSink.pop(entry)) {
                 mqttManager.sendLog(entry.message);
             }
 
