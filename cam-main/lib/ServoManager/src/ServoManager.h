@@ -6,6 +6,7 @@ public:
     ServoManager();
     void begin();
     void setPWM(uint8_t globalChannel, uint16_t onTick, uint16_t offTick);
+    void setOutputsEnabled(bool enabled);
     
 private:
     uint8_t m_boardAddresses[2];

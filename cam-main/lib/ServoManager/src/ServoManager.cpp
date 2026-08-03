@@ -23,12 +23,18 @@ void ServoManager::begin() {
     }
     delayMicroseconds(500); 
 
-    for (uint8_t ch = 0; ch < NUM_SERVOS; ch++) {
-        uint16_t onTick = ch * STAGGER_OFFSET;
-        uint16_t offTick = (onTick + SERVO_HOME_TICK) % 4096;
-        setPWM(ch, onTick, offTick);
+    // FIX: Initialize the exact 18 mapped channels instead of just counting 0-17
+    for (uint8_t leg = 0; leg < 6; leg++) {
+        uint8_t channels[3] = { LEG_COXA_CHANNELS[leg], LEG_FEMUR_CHANNELS[leg], LEG_TIBIA_CHANNELS[leg] };
+        
+        for (int i = 0; i < 3; i++) {
+            uint8_t ch = channels[i];
+            uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
+            uint16_t offTick = (onTick + SERVO_HOME_TICK) % 4096;
+            setPWM(ch, onTick, offTick);
+        }
     }
-    LOG_MOT("Buffered %d channels with phase-staggered home positions.", NUM_SERVOS);
+    LOG_MOT("Buffered %d mapped channels with phase-staggered home positions.", NUM_SERVOS);
 
     digitalWrite(PIN_PCA_OE, LOW);
     LOG_SYS("Dual Servo outputs ENABLED.");
@@ -73,4 +79,10 @@ bool ServoManager::writeRegister(uint8_t boardAddr, uint8_t reg, uint8_t value) 
     Wire.write(value);
     uint8_t error = Wire.endTransmission();
     return (error == 0); // 0 means Success (hardware ACK received)
+}
+
+void ServoManager::setOutputsEnabled(bool enabled) {
+    // PCA9685 OE pin is active LOW. (LOW = Enabled, HIGH = Disabled/Limp)
+    digitalWrite(PIN_PCA_OE, enabled ? LOW : HIGH);
+    LOG_SYS("Hardware Servo Outputs %s", enabled ? "ENABLED" : "DISABLED (LIMP)");
 }

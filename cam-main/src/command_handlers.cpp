@@ -3,6 +3,8 @@
 #include "servo_config.h"
 #include "logger.h"
 
+
+
 void registerAllCommandHandlers(
     CommandDispatcher& dispatcher,
     ServoManager& servoMgr,
@@ -12,7 +14,9 @@ void registerAllCommandHandlers(
 ) {
 
     // 1. Single Servo Direct Write Handler
-    dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr](const JsonDocument& doc) {
+    dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
+        motionCtrl.setRawServoMode(true); // TRUE: Pause IK Engine for manual control
+        
         uint8_t ch = doc["channel"] | 0;
         uint16_t pulseUs = doc["pulse_us"] | 1500;
         
@@ -25,7 +29,9 @@ void registerAllCommandHandlers(
     });
 
     // 2. Batch Servo Direct Write Handler
-    dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr](const JsonDocument& doc) {
+    dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
+        motionCtrl.setRawServoMode(true); // TRUE: Pause IK Engine for manual control
+        
         JsonArrayConst servos = doc["servos"].as<JsonArrayConst>();
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
@@ -37,8 +43,10 @@ void registerAllCommandHandlers(
         }
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
+
     // 3. Motion Engine Handler (Velocity Vectors & 6-DOF Body Poses)
     dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl](const JsonDocument& doc) {
+        motionCtrl.setRawServoMode(false); // RESUME the IK Engine
         // Check for Gait Mode Switch ("tripod", "ripple", "wave")
         if (doc["gait"].is<const char*>()) {
             String gaitStr = doc["gait"].as<String>();
@@ -56,7 +64,7 @@ void registerAllCommandHandlers(
         }
 
         // Process Velocity Vector Command
-        if (doc["vx"].is<float>() || doc["vy"].is<float>() || doc["omega"].is<float>() || doc["leg_stance"].is<float>()) {
+        if (!doc["vx"].isNull() || !doc["vy"].isNull() || !doc["omega"].isNull() || !doc["leg_stance"].isNull()) {
             VelocityCommand vCmd;
             vCmd.vx         = doc["vx"]          | 0.0f;
             vCmd.vy         = doc["vy"]          | 0.0f;
@@ -71,7 +79,7 @@ void registerAllCommandHandlers(
         }
 
         // Process Body Pose Command
-        if (doc["roll"].is<float>() || doc["pitch"].is<float>() || doc["pos_z"].is<float>()) {
+        if (!doc["roll"].isNull() || !doc["pitch"].isNull() || !doc["pos_z"].isNull()) {
             BodyPose pose;
             pose.posX  = doc["pos_x"] | 0.0f;
             pose.posY  = doc["pos_y"] | 0.0f;
@@ -85,7 +93,7 @@ void registerAllCommandHandlers(
     });
     
     // 4. System Logging Handler
-    dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr](const JsonDocument& doc) {
+    dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr, &servoMgr](const JsonDocument& doc) {
         if (doc["logging"].is<bool>()) {
             g_logEnabled = doc["logging"].as<bool>();
             LOG_SYS("Logging state: %d", g_logEnabled);
@@ -96,6 +104,10 @@ void registerAllCommandHandlers(
                 mqttMgr.sendConfig();
                 LOG_SYS("Configuration handshake published on request.");
             }
+        }
+        if (doc["power"].is<bool>()) {
+            bool powerState = doc["power"].as<bool>();
+            servoMgr.setOutputsEnabled(powerState);
         }
     });
 

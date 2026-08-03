@@ -1,5 +1,6 @@
 #include "MotionController.h"
 #include "servo_config.h"
+#include "logger.h"
 
 #define US_PER_DEGREE 11.11f // Angular conversion constant (~1000us span over 90 degrees)
 
@@ -7,6 +8,11 @@ MotionController::MotionController(ServoManager& servoMgr)
     : m_servoMgr(servoMgr) {
     m_targetPose = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     m_velocityCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f}; // Default: 25mm lift, 1.0s stride cycle
+    m_isRawMode = false; 
+}
+
+void MotionController::setRawServoMode(bool enable) {
+    m_isRawMode = enable;
 }
 
 void MotionController::begin() {
@@ -35,6 +41,9 @@ uint16_t MotionController::degreesToTick(float angleDeg, bool invert) {
 }
 
 void MotionController::update(float dtSeconds) {
+    // Yield hardware control if we are receiving direct manual servo commands
+    if (m_isRawMode) return; 
+
     // 1. Advance Gait Generator foot trajectories if velocity vector is active
     if (fabsf(m_velocityCmd.vx) > 0.1f || fabsf(m_velocityCmd.vy) > 0.1f || fabsf(m_velocityCmd.omega) > 0.1f) {
         m_gaitGen.update(dtSeconds, m_velocityCmd, m_footTargets);
@@ -43,10 +52,25 @@ void MotionController::update(float dtSeconds) {
     // 2. Calculate 6-leg body pose + leg IK angles
     HexapodJoints joints = m_kinematics.computeBodyPose(m_targetPose, m_footTargets);
 
-    if (!joints.allValid) return; // Failsafe abort if target position exceeds leg reach
+    // REMOVED: if (!joints.allValid) return; (This was causing the silent freeze!)
+
+    // Static variables to throttle our error logs so we don't spam the console at 100Hz
+    static unsigned long lastIkLog = 0;
+    bool printedError = false;
 
     // 3. Map solved angles to physical PCA9685 channels across dual boards
     for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
+        
+        // If this specific leg failed the IK math, log it and skip ONLY this leg
+        if (!joints.leg[leg].isValid) {
+            if (millis() - lastIkLog > 1000 && !printedError) {
+                LOG_ERR("IK Failsafe tripped on Leg %d! Coordinate is physically out of reach.", leg);
+                printedError = true;
+                lastIkLog = millis();
+            }
+            continue; 
+        }
+
         uint8_t coxaCh  = LEG_COXA_CHANNELS[leg];
         uint8_t femurCh = LEG_FEMUR_CHANNELS[leg];
         uint8_t tibiaCh = LEG_TIBIA_CHANNELS[leg];

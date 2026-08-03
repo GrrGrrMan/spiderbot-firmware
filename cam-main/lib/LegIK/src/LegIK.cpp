@@ -20,9 +20,13 @@ LegAngles LegIK::solveIK(float targetX, float targetY, float targetZ) {
     float D = sqrtf(planarDist * planarDist + targetZ * targetZ);
 
     // 3. Reachability Failsafe Check (Law of Cosines condition)
-    if (D > (m_l2 + m_l3) || D < fabsf(m_l2 - m_l3) || D == 0.0f) {
-        return result; // Target point is outside physical reach envelope
-    }
+    // If it asks for an impossible stretch, CLAMP it to the max physical reach so the leg just fully extends
+    float maxReach = (m_l2 + m_l3) - 0.1f;
+    float minReach = fabsf(m_l2 - m_l3) + 0.1f;
+    
+    if (D > maxReach) D = maxReach;
+    if (D < minReach) D = minReach;
+    if (D == 0.0f) D = 0.1f;
 
     // 4. Calculate Femur Angle using Law of Cosines
     float alpha1 = atan2f(-targetZ, planarDist); // Angle of D below horizontal
@@ -30,7 +34,7 @@ LegAngles LegIK::solveIK(float targetX, float targetY, float targetZ) {
     cosAlpha2 = constrain(cosAlpha2, -1.0f, 1.0f); // Numerical safety clamp
     float alpha2 = acosf(cosAlpha2);
     
-    float femurDeg = (alpha1 + alpha2) * (180.0f / M_PI);
+    float femurDeg = (alpha1 - alpha2) * (180.0f / M_PI);
 
     // 5. Calculate Tibia Angle using Law of Cosines
     float cosBeta = (m_l2 * m_l2 + m_l3 * m_l3 - D * D) / (2.0f * m_l2 * m_l3);
@@ -39,19 +43,18 @@ LegAngles LegIK::solveIK(float targetX, float targetY, float targetZ) {
 
     // Knee deflection relative to femur axis (neutral extended = 0 deg)
     float tibiaDeg = (M_PI - beta) * (180.0f / M_PI);
+    tibiaDeg = tibiaDeg - 90.0f; // Align to mathematical zero
 
-    // 6. Enforce Hardware Safety Bounds
-    if (coxaDeg  < COXA_MIN_DEG  || coxaDeg  > COXA_MAX_DEG  ||
-        femurDeg < FEMUR_MIN_DEG || femurDeg > FEMUR_MAX_DEG ||
-        tibiaDeg < TIBIA_MIN_DEG || tibiaDeg > TIBIA_MAX_DEG) {
-        return result; // Target exceeds joint rotation limits
-    }
+    // 6. ENFORCE HARDWARE SAFETY BOUNDS VIA CLAMPING (Do not abort!)
+    coxaDeg  = constrain(coxaDeg,  COXA_MIN_DEG,  COXA_MAX_DEG);
+    femurDeg = constrain(femurDeg, FEMUR_MIN_DEG, FEMUR_MAX_DEG);
+    tibiaDeg = constrain(tibiaDeg, TIBIA_MIN_DEG, TIBIA_MAX_DEG);
 
     // Return solved valid joint angles
     result.coxaDeg = coxaDeg;
     result.femurDeg = femurDeg;
     result.tibiaDeg = tibiaDeg;
-    result.isValid = true;
+    result.isValid = true; // Always true now, because we safely clamped it!
 
     return result;
 }

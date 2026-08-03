@@ -39,9 +39,16 @@ HexapodJoints HexapodKinematics::computeBodyPose(const BodyPose& pose, const Leg
     float cosY = cosf(yawRad),   sinY = sinf(yawRad);
 
     for (int i = 0; i < LEG_COUNT; i++) {
-        // Total foot position relative to body center
-        float totalFootX = m_mountOffsets[i].x + footTargets[i].x;
-        float totalFootY = m_mountOffsets[i].y + footTargets[i].y;
+        // Convert the incoming Local Foot Target into the Global Body Frame!
+        float cosM_fwd = cosf(m_mountAngles[i]);
+        float sinM_fwd = sinf(m_mountAngles[i]);
+        
+        float hipFootBodyX = footTargets[i].x * cosM_fwd - footTargets[i].y * sinM_fwd;
+        float hipFootBodyY = footTargets[i].x * sinM_fwd + footTargets[i].y * cosM_fwd;
+
+        // Total foot position relative to body center in the Body Frame
+        float totalFootX = m_mountOffsets[i].x + hipFootBodyX;
+        float totalFootY = m_mountOffsets[i].y + hipFootBodyY;
         float totalFootZ = m_mountOffsets[i].z + footTargets[i].z;
 
         // Apply 3D Rotation Matrix (Roll, Pitch, Yaw)
@@ -62,12 +69,12 @@ HexapodJoints HexapodKinematics::computeBodyPose(const BodyPose& pose, const Leg
         float bodyShiftY = rotY - pose.posY - m_mountOffsets[i].y;
         float bodyShiftZ = rotZ - pose.posZ - m_mountOffsets[i].z;
 
-        // Transform into individual leg's local coordinate frame using mounting angle
-        float cosM = cosf(-m_mountAngles[i]);
-        float sinM = sinf(-m_mountAngles[i]);
+        // Transform back into individual leg's local coordinate frame using inverse mounting angle
+        float cosM_inv = cosf(-m_mountAngles[i]);
+        float sinM_inv = sinf(-m_mountAngles[i]);
 
-        float legLocalX = bodyShiftX * cosM - bodyShiftY * sinM;
-        float legLocalY = bodyShiftX * sinM + bodyShiftY * cosM;
+        float legLocalX = bodyShiftX * cosM_inv - bodyShiftY * sinM_inv;
+        float legLocalY = bodyShiftX * sinM_inv + bodyShiftY * cosM_inv;
         float legLocalZ = bodyShiftZ;
 
         // Solve 3-DOF IK for the current leg

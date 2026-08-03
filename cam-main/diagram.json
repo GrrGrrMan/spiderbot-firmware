@@ -1,38 +1,124 @@
 {
   "version": 1,
-  "author": "Hexapod Monorepo",
+  "author": "Hexapod Monorepo - V2 Calibration Layout",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} },
-    { "type": "wokwi-logic-analyzer", "id": "logic1", "top": -150, "left": 250, "attrs": {} },
-    { "type": "chip-pca9685", "id": "pca1", "top": 50, "left": 250, "attrs": {} },
-    { "type": "chip-pca9685", "id": "pca2", "top": 250, "left": 250, "attrs": {} },
-    { "type": "wokwi-servo", "id": "servo1", "top": 50, "left": 450, "attrs": {} }
+    { "type": "board-esp32-devkit-c-v4", "id": "esp1", "top": -300, "left": 0, "attrs": {} },
+    { "type": "chip-pca9685", "id": "pca1", "top": 50, "left": -250, "attrs": {} },
+    { "type": "chip-pca9685", "id": "pca2", "top": 50, "left": 250, "attrs": {} },
+    
+    { "type": "wokwi-vcc", "id": "vcc1", "top": -450, "left": -50, "attrs": {} },
+    { "type": "wokwi-gnd", "id": "gnd1", "top": -450, "left": 50, "attrs": {} },
+    
+    { "type": "wokwi-servo", "id": "servo_lf_c", "top": -150, "left": -550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_lf_f", "top": -50, "left": -550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_lf_t", "top": 50, "left": -550, "attrs": {} },
+    
+    { "type": "wokwi-servo", "id": "servo_lm_c", "top": 180, "left": -550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_lm_f", "top": 280, "left": -550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_lm_t", "top": 380, "left": -550, "attrs": {} },
+    
+    { "type": "wokwi-servo", "id": "servo_lb_c", "top": 510, "left": -550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_lb_f", "top": 610, "left": -550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_lb_t", "top": 710, "left": -550, "attrs": {} },
+    
+    { "type": "wokwi-servo", "id": "servo_rf_c", "top": -150, "left": 550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_rf_f", "top": -50, "left": 550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_rf_t", "top": 50, "left": 550, "attrs": {} },
+    
+    { "type": "wokwi-servo", "id": "servo_rm_c", "top": 180, "left": 550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_rm_f", "top": 280, "left": 550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_rm_t", "top": 380, "left": 550, "attrs": {} },
+    
+    { "type": "wokwi-servo", "id": "servo_rb_c", "top": 510, "left": 550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_rb_f", "top": 610, "left": 550, "attrs": {} },
+    { "type": "wokwi-servo", "id": "servo_rb_t", "top": 710, "left": 550, "attrs": {} },
+    
+    { "type": "wokwi-text", "id": "txt1", "top": 20, "left": -230, "attrs": { "text": "Board 1 (0x40) - LEFT SIDE" } },
+    { "type": "txt2", "id": "txt2", "top": 20, "left": 270, "attrs": { "text": "Board 2 (0x41) - RIGHT SIDE" } }
   ],
   "connections": [
-    [ "esp:TX", "$serialMonitor:RX", "", [] ],
-    [ "esp:RX", "$serialMonitor:TX", "", [] ],
+    [ "esp1:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp1:RX", "$serialMonitor:TX", "", [] ],
     
-    [ "esp:15", "logic1:D0", "blue", [] ],
-    [ "esp:14", "logic1:D1", "yellow", [] ],
-    [ "esp:13", "logic1:D2", "orange", [] ],
-    [ "esp:GND.1", "logic1:GND", "black", [] ],
+    [ "esp1:15", "pca1:SDA", "violet", [] ],
+    [ "esp1:15", "pca2:SDA", "violet", [] ],
+    [ "esp1:14", "pca1:SCL", "magenta", [] ],
+    [ "esp1:14", "pca2:SCL", "magenta", [] ],
+    [ "esp1:13", "pca1:OE", "orange", [] ],
+    [ "esp1:13", "pca2:OE", "orange", [] ],
     
-    [ "esp:3V3", "pca1:VCC", "red", [] ],
-    [ "esp:GND.1", "pca1:GND", "black", [] ],
-    [ "esp:15", "pca1:SDA", "blue", [] ],
-    [ "esp:14", "pca1:SCL", "yellow", [] ],
-    [ "esp:13", "pca1:OE", "orange", [] ],
+    [ "esp1:3V3", "pca1:VCC", "red", [] ],
+    [ "esp1:3V3", "pca2:VCC", "red", [] ],
+    [ "esp1:GND.1", "pca1:GND", "black", [] ],
+    [ "esp1:GND.1", "pca2:GND", "black", [] ],
     
-    [ "esp:3V3", "pca2:VCC", "red", [] ],
-    [ "esp:GND.1", "pca2:GND", "black", [] ],
-    [ "esp:15", "pca2:SDA", "blue", [] ],
-    [ "esp:14", "pca2:SCL", "yellow", [] ],
-    [ "esp:13", "pca2:OE", "orange", [] ],
-    [ "esp:3V3", "pca2:A0", "green", [] ],
-
-    [ "pca1:PWM0", "servo1:PWM", "orange", [] ],
-    [ "esp:GND.1", "servo1:GND", "black", [] ],
-    [ "esp:5V", "servo1:V+", "red", [] ]
-  ]
+    [ "pca2:A0", "pca2:VCC", "red", [] ],
+    
+    [ "pca1:LED0", "servo_lf_c:PWM", "orange", [] ],
+    [ "pca1:LED1", "servo_lf_f:PWM", "orange", [] ],
+    [ "pca1:LED2", "servo_lf_t:PWM", "orange", [] ],
+    
+    [ "pca1:LED4", "servo_lm_c:PWM", "orange", [] ],
+    [ "pca1:LED5", "servo_lm_f:PWM", "orange", [] ],
+    [ "pca1:LED6", "servo_lm_t:PWM", "orange", [] ],
+    
+    [ "pca1:LED8", "servo_lb_c:PWM", "orange", [] ],
+    [ "pca1:LED9", "servo_lb_f:PWM", "orange", [] ],
+    [ "pca1:LED10", "servo_lb_t:PWM", "orange", [] ],
+    
+    [ "pca2:LED1", "servo_rb_c:PWM", "orange", [] ],
+    [ "pca2:LED2", "servo_rb_f:PWM", "orange", [] ],
+    [ "pca2:LED3", "servo_rb_t:PWM", "orange", [] ],
+    
+    [ "pca2:LED5", "servo_rm_c:PWM", "orange", [] ],
+    [ "pca2:LED6", "servo_rm_f:PWM", "orange", [] ],
+    [ "pca2:LED7", "servo_rm_t:PWM", "orange", [] ],
+    
+    [ "pca2:LED9", "servo_rf_c:PWM", "orange", [] ],
+    [ "pca2:LED10", "servo_rf_f:PWM", "orange", [] ],
+    [ "pca2:LED11", "servo_rf_t:PWM", "orange", [] ],
+    
+    [ "gnd1:GND", "servo_lf_c:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lf_f:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lf_t:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lm_c:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lm_f:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lm_t:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lb_c:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lb_f:GND", "black", [] ],
+    [ "gnd1:GND", "servo_lb_t:GND", "black", [] ],
+    
+    [ "gnd1:GND", "servo_rf_c:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rf_f:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rf_t:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rm_c:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rm_f:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rm_t:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rb_c:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rb_f:GND", "black", [] ],
+    [ "gnd1:GND", "servo_rb_t:GND", "black", [] ],
+    
+    [ "vcc1:VCC", "servo_lf_c:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lf_f:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lf_t:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lm_c:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lm_f:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lm_t:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lb_c:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lb_f:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_lb_t:V+", "red", [] ],
+    
+    [ "vcc1:VCC", "servo_rf_c:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rf_f:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rf_t:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rm_c:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rm_f:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rm_t:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rb_c:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rb_f:V+", "red", [] ],
+    [ "vcc1:VCC", "servo_rb_t:V+", "red", [] ]
+  ],
+  "serialMonitor": { "display": "always", "newline": "lf", "convertEol": false },
+  "dependencies": { "chip-pca9685": "github:bonnyr/wokwi-pca9685-custom-chip@0.1.1" }
 }
