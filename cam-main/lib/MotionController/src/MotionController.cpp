@@ -33,12 +33,15 @@ void MotionController::setGaitType(GaitType type) {
     m_gaitGen.setGaitType(type);
 }
 
-uint16_t MotionController::degreesToTick(float angleDeg, bool invert) {
+uint16_t MotionController::degreesToTick(float angleDeg, bool invert, float neutralOffset) {
     if (invert) angleDeg = -angleDeg;
+    angleDeg += neutralOffset; // Inject physical hardware calibration trim
+    
     float pulseUs = 1500.0f + (angleDeg * US_PER_DEGREE);
-    pulseUs = constrain(pulseUs, 500.0f, 2500.0f); // Hardware pulse limits
+    pulseUs = constrain(pulseUs, 488.0f, 2393.0f); 
     return (uint16_t)((pulseUs * 4096.0f) / 20000.0f);
 }
+
 
 void MotionController::update(float dtSeconds) {
     // Yield hardware control if we are receiving direct manual servo commands
@@ -60,11 +63,9 @@ void MotionController::update(float dtSeconds) {
 
     // 3. Map solved angles to physical PCA9685 channels across dual boards
     for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
-        
-        // If this specific leg failed the IK math, log it and skip ONLY this leg
         if (!joints.leg[leg].isValid) {
             if (millis() - lastIkLog > 1000 && !printedError) {
-                LOG_ERR("IK Failsafe tripped on Leg %d! Coordinate is physically out of reach.", leg);
+                LOG_ERR("IK Failsafe tripped on Leg %d!", leg);
                 printedError = true;
                 lastIkLog = millis();
             }
@@ -74,26 +75,39 @@ void MotionController::update(float dtSeconds) {
         uint8_t coxaCh  = LEG_COXA_CHANNELS[leg];
         uint8_t femurCh = LEG_FEMUR_CHANNELS[leg];
         uint8_t tibiaCh = LEG_TIBIA_CHANNELS[leg];
+        bool invertLeg = (leg >= 3); 
 
-        bool invertLeg = (leg >= 3); // Invert left side legs for mirrored symmetry
+        // UPDATED: Pass the calibration trims to the converter!
+        uint16_t coxaWidthTicks  = degreesToTick(joints.leg[leg].coxaDeg, invertLeg, COXA_NEUTRAL_DEG);
+        uint16_t femurWidthTicks = degreesToTick(joints.leg[leg].femurDeg, invertLeg, FEMUR_NEUTRAL_DEG);
+        uint16_t tibiaWidthTicks = degreesToTick(joints.leg[leg].tibiaDeg, invertLeg, TIBIA_NEUTRAL_DEG);
 
-        // Retrieve raw joint duration ticks (neutral is ~307 ticks / 1500us)
-        uint16_t coxaWidthTicks  = degreesToTick(joints.leg[leg].coxaDeg, invertLeg);
-        uint16_t femurWidthTicks = degreesToTick(joints.leg[leg].femurDeg, invertLeg);
-        uint16_t tibiaWidthTicks = degreesToTick(joints.leg[leg].tibiaDeg, invertLeg);
-
-        // Clamp staggering start points inside the 12-bit clock limit (0 - 4095)
         uint16_t coxaOn   = (coxaCh  * STAGGER_OFFSET) % 4096;
         uint16_t femurOn  = (femurCh * STAGGER_OFFSET) % 4096;
         uint16_t tibiaOn  = (tibiaCh * STAGGER_OFFSET) % 4096;
 
-        // Calculate absolute turn-off positions wrapping around the 4096-tick window
-        uint16_t coxaOff  = (coxaOn  + coxaWidthTicks) % 4096;
-        uint16_t femurOff = (femurOn + femurWidthTicks) % 4096;
-        uint16_t tibiaOff = (tibiaOn + tibiaWidthTicks) % 4096;
-
-        m_servoMgr.setPWM(coxaCh,  coxaOn,  coxaOff);
-        m_servoMgr.setPWM(femurCh, femurOn, femurOff);
-        m_servoMgr.setPWM(tibiaCh, tibiaOn, tibiaOff);
+        m_servoMgr.setPWM(coxaCh,  coxaOn,  (coxaOn + coxaWidthTicks) % 4096);
+        m_servoMgr.setPWM(femurCh, femurOn, (femurOn + femurWidthTicks) % 4096);
+        m_servoMgr.setPWM(tibiaCh, tibiaOn, (tibiaOn + tibiaWidthTicks) % 4096);
     }
+}
+
+void MotionController::setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma) {
+    bool invertLeg = (leg >= 3); // Left side mirrored
+    uint8_t coxaCh  = LEG_COXA_CHANNELS[leg];
+    uint8_t femurCh = LEG_FEMUR_CHANNELS[leg];
+    uint8_t tibiaCh = LEG_TIBIA_CHANNELS[leg];
+
+    // Note: The Web UI gamma (tibia) aligns negatively to the math model
+    uint16_t coxaWidthTicks  = degreesToTick(alpha, invertLeg, COXA_NEUTRAL_DEG);
+    uint16_t femurWidthTicks = degreesToTick(beta,  invertLeg, FEMUR_NEUTRAL_DEG);
+    uint16_t tibiaWidthTicks = degreesToTick(-gamma, invertLeg, TIBIA_NEUTRAL_DEG);
+
+    uint16_t coxaOn   = (coxaCh  * STAGGER_OFFSET) % 4096;
+    uint16_t femurOn  = (femurCh * STAGGER_OFFSET) % 4096;
+    uint16_t tibiaOn  = (tibiaCh * STAGGER_OFFSET) % 4096;
+
+    m_servoMgr.setPWM(coxaCh,  coxaOn,  (coxaOn + coxaWidthTicks) % 4096);
+    m_servoMgr.setPWM(femurCh, femurOn, (femurOn + femurWidthTicks) % 4096);
+    m_servoMgr.setPWM(tibiaCh, tibiaOn, (tibiaOn + tibiaWidthTicks) % 4096);
 }

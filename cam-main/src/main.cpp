@@ -18,6 +18,9 @@ ServoManager servoManager;
 MotionController motionController(servoManager);
 CommandDispatcher cmdDispatcher;
 
+volatile unsigned long g_lastCmdTime = 0;
+
+
 void TaskNetwork(void *pvParameters);
 void TaskControl(void *pvParameters);
 
@@ -34,6 +37,7 @@ void setup() {
     registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController, mqttManager);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
+        g_lastCmdTime = millis(); // Reset watchdog on ANY incoming command
         cmdDispatcher.dispatch(type, doc);
     });
 
@@ -91,10 +95,20 @@ void TaskControl(void *pvParameters) {
     motionController.begin();
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(10); // 100Hz loop (10ms)
+    const TickType_t xFrequency = pdMS_TO_TICKS(10); 
 
     for (;;) {
-        motionController.update(0.01f); // Update motion engine with 10ms time delta
+        // --- SAFETY WATCHDOG ---
+        // If we haven't received an MQTT command in 2.0 seconds, halt everything.
+        if (g_lastCmdTime > 0 && (millis() - g_lastCmdTime > 2000)) {
+            VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
+            motionController.setVelocity(stopCmd);     // Stop walking
+            servoManager.setOutputsEnabled(false);     // Cut PWM signals (go limp)
+            g_lastCmdTime = 0;                         // Reset tracker to avoid log spam
+            LOG_ERR("Watchdog Timeout! Connection lost. Halting motion and disabling servos.");
+        }
+
+        motionController.update(0.01f); 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
 }

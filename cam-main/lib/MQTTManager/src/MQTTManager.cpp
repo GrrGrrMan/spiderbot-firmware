@@ -127,18 +127,20 @@ bool MQTTManager::sendConfig() {
 void MQTTManager::onMqttMessage(char* topic, byte* payload, unsigned int length) {
     if (!s_instance) return;
 
-    LOG_NET("MQTT Received [%s]", topic);
-
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload, length);
     if (err) {
-        LOG_ERR("JSON parse failed: %s", err.c_str());
+        LOG_ERR("JSON parse failed on topic [%s]: %s", topic, err.c_str());
         return;
     }
 
     const char* type = doc["type"] | "unknown";
+
+    if (strcmp(type, "heartbeat") != 0) {
+        LOG_NET("MQTT Received [%s] -> Type: '%s'", topic, type);
+    }
+
     if (s_instance->m_cmdCallback) {
         s_instance->m_cmdCallback(String(type), doc);
     }
 }
-

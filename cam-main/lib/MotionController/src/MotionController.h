@@ -18,7 +18,7 @@ public:
     void setVelocity(const VelocityCommand& cmd);
     void setGaitType(GaitType type);
     void setRawServoMode(bool enable);
-
+    void setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma);
 
 private:
     bool m_isRawMode;
@@ -30,6 +30,5 @@ private:
     VelocityCommand m_velocityCmd;
     LegPosition m_footTargets[LEG_COUNT];
 
-    uint16_t degreesToTick(float angleDeg, bool invert);
-    
+    uint16_t degreesToTick(float angleDeg, bool invert, float neutralOffset);
 };

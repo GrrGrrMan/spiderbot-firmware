@@ -12,6 +12,9 @@ void registerAllCommandHandlers(
     MotionController& motionCtrl,
     MQTTManager& mqttMgr
 ) {
+    dispatcher.registerHandler("heartbeat", [](const JsonDocument& doc) {
+        // updates g_lastCmdTime in setup()
+    });
 
     // 1. Single Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
@@ -90,6 +93,28 @@ void registerAllCommandHandlers(
             motionCtrl.setBodyPose(pose);
             LOG_MOT("Pose Cmd: Roll=%.1f, Pitch=%.1f, Yaw=%.1f", pose.roll, pose.pitch, pose.yaw);
         }
+    });
+
+    // 3.5 High-Level Pose Command Handler (Decoupled UI)
+    dispatcher.registerHandler(CMD_TYPE_POSE, [&motionCtrl](const JsonDocument& doc) {
+        motionCtrl.setRawServoMode(true); // Pause IK Engine for manual angle control
+        JsonObjectConst poseObj = doc["pose"].as<JsonObjectConst>();
+        
+        // Maps firmware array indices (0-5) to the Web UI string names
+        const char* legNames[6] = {
+            "rightFront", "rightMiddle", "rightBack", 
+            "leftBack", "leftMiddle", "leftFront"
+        };
+        
+        for (uint8_t i = 0; i < 6; i++) {
+            if (poseObj[legNames[i]].is<JsonObjectConst>()) {
+                float alpha = poseObj[legNames[i]]["alpha"] | 0.0f;
+                float beta  = poseObj[legNames[i]]["beta"]  | 0.0f;
+                float gamma = poseObj[legNames[i]]["gamma"] | 0.0f;
+                motionCtrl.setRawLegAngles(i, alpha, beta, gamma);
+            }
+        }
+        LOG_MOT("Applied direct angle pose from Web UI.");
     });
     
     // 4. System Logging Handler
