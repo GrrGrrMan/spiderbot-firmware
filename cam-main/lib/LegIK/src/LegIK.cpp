@@ -54,7 +54,7 @@ LegAngles LegIK::solveIK(float targetX, float targetY, float targetZ) {
     result.coxaDeg = coxaDeg;
     result.femurDeg = femurDeg;
     result.tibiaDeg = tibiaDeg;
-    result.isValid = true; // Always true now, because we safely clamped it!
+    result.isValid = true; // Always true, need to fix.
 
     return result;
 }

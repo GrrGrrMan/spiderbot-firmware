@@ -33,7 +33,7 @@ void registerAllCommandHandlers(
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
             uint16_t rawPulse = s["pulse_us"] | 1500;
-            servoMgr.setServoPulseUs(ch, rawPulse); // ✅ Clean single-line write per channel
+            servoMgr.setServoPulseUs(ch, rawPulse); // 
         }
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
