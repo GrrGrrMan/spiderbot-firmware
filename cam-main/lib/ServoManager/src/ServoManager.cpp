@@ -83,6 +83,19 @@ bool ServoManager::writeRegister(uint8_t boardAddr, uint8_t reg, uint8_t value) 
 
 void ServoManager::setOutputsEnabled(bool enabled) {
     // PCA9685 OE pin is active LOW. (LOW = Enabled, HIGH = Disabled/Limp)
+    m_outputsEnabled = enabled;
     digitalWrite(PIN_PCA_OE, enabled ? LOW : HIGH);
     LOG_SYS("Hardware Servo Outputs %s", enabled ? "ENABLED" : "DISABLED (LIMP)");
+}
+
+void ServoManager::setServoWidthTicks(uint8_t globalChannel, uint16_t widthTicks) {
+    uint16_t onTick = (globalChannel * STAGGER_OFFSET) % 4096;
+    uint16_t offTick = (onTick + widthTicks) % 4096;
+    setPWM(globalChannel, onTick, offTick);
+}
+
+void ServoManager::setServoPulseUs(uint8_t globalChannel, uint16_t pulseUs) {
+    uint16_t safePulse = constrain(pulseUs, (uint16_t)488, (uint16_t)2393);
+    uint16_t widthTicks = (safePulse * 4096UL) / 20000UL;
+    setServoWidthTicks(globalChannel, widthTicks);
 }

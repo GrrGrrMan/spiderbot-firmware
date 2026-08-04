@@ -86,9 +86,9 @@ void MotionController::update(float dtSeconds) {
         uint16_t femurOn  = (femurCh * STAGGER_OFFSET) % 4096;
         uint16_t tibiaOn  = (tibiaCh * STAGGER_OFFSET) % 4096;
 
-        m_servoMgr.setPWM(coxaCh,  coxaOn,  (coxaOn + coxaWidthTicks) % 4096);
-        m_servoMgr.setPWM(femurCh, femurOn, (femurOn + femurWidthTicks) % 4096);
-        m_servoMgr.setPWM(tibiaCh, tibiaOn, (tibiaOn + tibiaWidthTicks) % 4096);
+        m_servoMgr.setServoWidthTicks(coxaCh,  coxaWidthTicks);
+        m_servoMgr.setServoWidthTicks(femurCh, femurWidthTicks);
+        m_servoMgr.setServoWidthTicks(tibiaCh, tibiaWidthTicks);
     }
 }
 
@@ -107,7 +107,7 @@ void MotionController::setRawLegAngles(uint8_t leg, float alpha, float beta, flo
     uint16_t femurOn  = (femurCh * STAGGER_OFFSET) % 4096;
     uint16_t tibiaOn  = (tibiaCh * STAGGER_OFFSET) % 4096;
 
-    m_servoMgr.setPWM(coxaCh,  coxaOn,  (coxaOn + coxaWidthTicks) % 4096);
-    m_servoMgr.setPWM(femurCh, femurOn, (femurOn + femurWidthTicks) % 4096);
-    m_servoMgr.setPWM(tibiaCh, tibiaOn, (tibiaOn + tibiaWidthTicks) % 4096);
+    m_servoMgr.setServoWidthTicks(coxaCh,  coxaWidthTicks);
+    m_servoMgr.setServoWidthTicks(femurCh, femurWidthTicks);
+    m_servoMgr.setServoWidthTicks(tibiaCh, tibiaWidthTicks);
 }

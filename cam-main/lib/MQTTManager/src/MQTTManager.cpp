@@ -17,11 +17,10 @@ MQTTManager::MQTTManager()
 }
 
 void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
-    m_configTopic = "hexapod/" + m_deviceId + "/config";
-
     m_deviceId = String(deviceId);
     m_brokerPort = brokerPort;
 
+    m_configTopic    = "hexapod/" + m_deviceId + "/config";
     m_cmdTopicGlobal = "hexapod/cmd";
     m_cmdTopicDevice = "hexapod/" + m_deviceId + "/cmd";
     m_telemetryTopic = "hexapod/" + m_deviceId + "/telemetry";

@@ -82,6 +82,7 @@ void TaskNetwork(void *pvParameters) {
             telemetry["rssi"]      = WiFi.RSSI();
             telemetry["ip"]        = netManager.getLocalIP();
             telemetry["hotspot"]   = netManager.isHotspot();
+            telemetry["power"]     = servoManager.isOutputsEnabled();
 
             mqttManager.sendTelemetry(telemetry);
         }

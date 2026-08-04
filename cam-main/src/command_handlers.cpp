@@ -18,31 +18,22 @@ void registerAllCommandHandlers(
 
     // 1. Single Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
-        motionCtrl.setRawServoMode(true); // TRUE: Pause IK Engine for manual control
-        
+        motionCtrl.setRawServoMode(true);
         uint8_t ch = doc["channel"] | 0;
-        uint16_t pulseUs = doc["pulse_us"] | 1500;
-        
-        uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
-        uint16_t widthTicks = (pulseUs * 4096UL) / 20000UL;
-        uint16_t offTick = (onTick + widthTicks) % 4096;
-        
-        servoMgr.setPWM(ch, onTick, offTick);
-        LOG_MOT("Direct Servo Write: Ch %d -> %d us (On:%d Off:%d)", ch, pulseUs, onTick, offTick);
+        uint16_t rawPulse = doc["pulse_us"] | 1500;
+        servoMgr.setServoPulseUs(ch, rawPulse);
+        LOG_MOT("Direct Servo Write: Ch %d -> %d us", ch, rawPulse);
     });
 
     // 2. Batch Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
-        motionCtrl.setRawServoMode(true); // TRUE: Pause IK Engine for manual control
+        motionCtrl.setRawServoMode(true);
         
         JsonArrayConst servos = doc["servos"].as<JsonArrayConst>();
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
-            uint16_t pulseUs = s["pulse_us"] | 1500;
-            uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
-            uint16_t widthTicks = (pulseUs * 4096UL) / 20000UL;
-            uint16_t offTick = (onTick + widthTicks) % 4096;
-            servoMgr.setPWM(ch, onTick, offTick);
+            uint16_t rawPulse = s["pulse_us"] | 1500;
+            servoMgr.setServoPulseUs(ch, rawPulse); // ✅ Clean single-line write per channel
         }
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });

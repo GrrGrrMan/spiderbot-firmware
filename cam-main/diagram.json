@@ -34,8 +34,8 @@
     { "type": "wokwi-servo", "id": "servo_rb_f", "top": 610, "left": 550, "attrs": {} },
     { "type": "wokwi-servo", "id": "servo_rb_t", "top": 710, "left": 550, "attrs": {} },
     
-    { "type": "wokwi-text", "id": "txt1", "top": 20, "left": -230, "attrs": { "text": "Board 1 (0x40) - LEFT SIDE" } },
-    { "type": "txt2", "id": "txt2", "top": 20, "left": 270, "attrs": { "text": "Board 2 (0x41) - RIGHT SIDE" } }
+  { "type": "wokwi-text", "id": "txt1", "top": 20, "left": -230, "attrs": { "text": "Board 1 (0x40) - LEFT SIDE" } },
+  { "type": "wokwi-text", "id": "txt2", "top": 20, "left": 270, "attrs": { "text": "Board 2 (0x41) - RIGHT SIDE" } }
   ],
   "connections": [
     [ "esp1:TX", "$serialMonitor:RX", "", [] ],

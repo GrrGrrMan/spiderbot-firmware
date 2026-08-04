@@ -6,7 +6,8 @@
 #define CMD_TYPE_SERVO_BATCH  "servo_batch"
 #define CMD_TYPE_MOTION       "motion"
 #define CMD_TYPE_SYSTEM       "system"
-#define CMD_TYPE_OTA          "ota" 
+#define CMD_TYPE_POSE         "pose"
+#define CMD_TYPE_OTA          "ota"
 
 inline void buildConfigPayload(JsonDocument& doc, const String& deviceId) {
     doc["device_id"] = deviceId;
