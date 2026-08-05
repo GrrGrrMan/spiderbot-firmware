@@ -27,8 +27,14 @@ private:
     GaitGenerator m_gaitGen;
 
     BodyPose m_targetPose;
+    BodyPose m_currentPose;           // Slewed pose actually applied each tick
     VelocityCommand m_velocityCmd;
+    VelocityCommand m_currentVelocity; // Slewed velocity actually applied each tick
     LegPosition m_footTargets[LEG_COUNT];
+
+    struct RawLegAngles { float alpha, beta, gamma; };
+    RawLegAngles m_rawTargetAngles[LEG_COUNT];  // Latest MQTT-commanded raw pose per leg
+    RawLegAngles m_rawCurrentAngles[LEG_COUNT]; // Slewed raw angles actually written each tick
 
     uint16_t degreesToTick(float angleDeg, bool invert, float neutralOffset);
 };
