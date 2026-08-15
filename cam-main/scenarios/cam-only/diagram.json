@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "author": "V2 Hexapod - P2 CAM Phase C (cam-only bringup smoke; Wokwi has NO OV2640 emulation)",
+  "editor": "wokwi",
+  "parts": [
+    { "type": "board-esp32-devkit-c-v4", "id": "esp", "top": 0, "left": 0, "attrs": {} }
+  ],
+  "connections": [
+    [ "esp:TX", "$serialMonitor:RX", "", [] ],
+    [ "esp:RX", "$serialMonitor:TX", "", [] ]
+  ],
+  "serialMonitor": { "display": "always", "newline": "lf", "convertEol": false }
+}

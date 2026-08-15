@@ -1,0 +1,10 @@
+# Wokwi CLI config for the cam-main cam-only scenario (P2 Phase C code-path smoke)
+# https://docs.wokwi.com/wokwi-cli/configuration
+
+[wokwi]
+version = 1
+# Paths relative to THIS directory (scenarios/cam-only/).
+# .pio lives at cam-main/.pio -> two '..' up from scenarios/cam-only.
+# Env is 'esp32cam' -> .pio/build/esp32cam/firmware.bin
+firmware = '../../.pio/build/esp32cam/firmware.bin'
+elf      = '../../.pio/build/esp32cam/firmware.elf'

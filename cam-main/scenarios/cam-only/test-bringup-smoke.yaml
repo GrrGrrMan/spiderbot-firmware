@@ -1,0 +1,34 @@
+# V2 Hexapod CAM cam-only BRINGUP SMOKE (P2 Phase C, deliverable 2.2, re-scoped)
+# Run: wokwi-cli firmware/cam-main/scenarios/cam-only/ --scenario test-bringup-smoke.yaml
+#
+# IMPORTANT (researched via context7 + Brave + GitHub on 2026-08-16): Wokwi does
+# NOT emulate an image sensor. No board part has an OV2640, so esp_camera_init()
+# always returns ESP_ERR_NOT_FOUND (0x105). The roadmap's old "synthetic frames"
+# premise is WRONG -> the MJPEG :81/stream path can only be verified on PHYSICAL
+# hardware.
+#
+# Therefore this scenario is a BRINGUP SMOKE of the CAM firmware's reachable
+# code path: boot -> WiFi (Wokwi-GUEST) -> MQTT (broker.emqx.io) -> retained
+# config publish -> camera task runs and FAILS GRACEFULLY without taking down
+# the 100 Hz control loop (watchdog intact).
+#
+# Board: board-esp32-devkit-c-v4 (a board the Wokwi CLI boots; cam-only has no
+# servos, so no PCA9685 parts are needed).
+#
+# Scenario schema: https://docs.wokwi.com/wokwi-ci/automation-scenarios
+# (steps use 'delay' + 'wait-serial' keys, NOT 'wait'/'expect'). wait-serial is
+# substring-matching against the serial stream.
+# GOTCHA (empirically validated 2026-08-16): keep the initial 'delay' SMALL (1s).
+# A 3s+ initial delay makes the scenario engine's first wait-serial miss its
+# per-step window and the whole run times out (exit 42), even though every
+# asserted line appears in the serial log. With delay 1s the 5-step smoke PASSES.
+
+name: CAM Firmware Bringup Smoke
+version: 1
+steps:
+  - delay: 1s
+  - wait-serial: "Booting esp-cam-main"
+  - wait-serial: "MQTT Connected successfully to: broker.emqx.io!"
+  - wait-serial: "Retained hardware configuration published"
+  - wait-serial: "esp_camera_init failed: 0x105"
+  - wait-serial: "camera subsystem failed to start."
