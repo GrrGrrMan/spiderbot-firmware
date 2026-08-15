@@ -1,6 +1,7 @@
 #pragma once
 
 #define DEVICE_ID "hexapod-cam-01"
+#define MAX_BROKERS_PER_SSID 3 // Match the constant in NetworkManager.h
 
 #include <Arduino.h>
 
@@ -8,14 +9,19 @@ struct WifiCredential {
     const char* ssid;
     const char* pass;
     bool isHotspot;
-    const char* mqttBroker; 
+    const char* mqttBrokers[MAX_BROKERS_PER_SSID]; // Multi-broker array
 };
 
 const WifiCredential KNOWN_NETWORKS[] = {
-    {"spiderlink", "spiderbot", true, "192.168.4.1"},   // Pi Hotspot
-    {"home1", "pass", false, "pi-hub.local"},
-    {"home2", "***REMOVED***", false, "pi-hub.local"},
-    {"Wokwi-GUEST", "", false, "broker.emqx.io"} // Testing purposes
+    // Pi Hotspot: Targets its static AP gateway. Remaining slots are nullptr.
+    {"spiderlink", "spiderbot", true, {"192.168.4.1", nullptr, nullptr}},
+    
+    // Home Networks: Resolves spiderbot-j first, then falls back to spider-w
+    {"home1", "pass", false, {"spiderbot-j.local", "spider-w.local", nullptr}},
+    {"home2", "***REMOVED***", false, {"spiderbot-j.local", "spider-w.local", nullptr}},
+    
+    // Testing default
+    {"Wokwi-GUEST", "", false, {"broker.emqx.io", nullptr, nullptr}}
 };
 
 const size_t KNOWN_NETWORKS_COUNT = sizeof(KNOWN_NETWORKS) / sizeof(KNOWN_NETWORKS[0]);

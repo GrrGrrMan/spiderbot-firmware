@@ -1,6 +1,8 @@
 #include "MQTTManager.h"
 #include "logger.h"
 #include "cmd_schema.h"
+#include "NetworkManager.h"
+#include <ESPmDNS.h> 
 
 static MQTTManager* s_instance = nullptr;
 
@@ -37,22 +39,62 @@ void MQTTManager::setCommandCallback(CommandCallback cb) {
 void MQTTManager::reconnect(const char* brokerHost) {
     if (m_mqttClient.connected()) return;
 
-    if (m_currentBrokerHost != brokerHost) {
-        m_currentBrokerHost = brokerHost;
-        m_mqttClient.setServer(m_currentBrokerHost.c_str(), m_brokerPort);
-    }
+    // Start ESP32's built-in mDNS client
+    MDNS.begin("hexapod-cam-client");
 
     // Generate unique Client ID using ESP32 MAC address to prevent public broker disconnect collisions
     String uniqueClientId = m_deviceId + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
-    LOG_NET("Connecting to MQTT Broker at %s:%d as [%s]...", m_currentBrokerHost.c_str(), m_brokerPort, uniqueClientId.c_str());
+    bool connected = false;
 
-    if (m_mqttClient.connect(uniqueClientId.c_str())) {
-        LOG_NET("MQTT Connected successfully!");
-        m_mqttClient.subscribe(m_cmdTopicGlobal.c_str());
-        m_mqttClient.subscribe(m_cmdTopicDevice.c_str());
-        LOG_NET("Subscribed to [%s] & [%s]", m_cmdTopicGlobal.c_str(), m_cmdTopicDevice.c_str());
-    } else {
-        LOG_ERR("MQTT connect failed, state=%d", m_mqttClient.state());
+    // Iterate through configured candidates sequentially
+    for (uint8_t i = 0; i < MAX_BROKERS_PER_SSID; i++) {
+        const char* brokerCandidate = netManager.getMQTTBroker(i);
+        if (!brokerCandidate) break; // End of configured candidates list
+
+        String hostStr = String(brokerCandidate);
+        IPAddress targetIP;
+
+        // 1. mDNS filter: Check if the .local host is active (150ms timeout)
+        if (hostStr.endsWith(".local") || hostStr.indexOf('.') == -1) {
+            String hostname = hostStr;
+            if (hostname.endsWith(".local")) {
+                hostname = hostname.substring(0, hostname.length() - 6); // Strip ".local"
+            }
+
+            // Perform non-blocking mDNS query
+            targetIP = MDNS.queryHost(hostname, 150); 
+            
+            if (targetIP.toString() == "0.0.0.0") {
+                LOG_NET("Broker %s is offline (mDNS failed in 150ms). Skipping...", brokerCandidate);
+                continue; // Skip offline candidate instantly
+            }
+            
+            LOG_NET("Broker %s is ONLINE at IP: %s.", brokerCandidate, targetIP.toString().c_str());
+            m_mqttClient.setServer(targetIP, m_brokerPort);
+            m_currentBrokerHost = targetIP.toString();
+        } else {
+            // For raw IPs or external cloud brokers
+            m_mqttClient.setServer(brokerCandidate, m_brokerPort);
+            m_currentBrokerHost = hostStr;
+        }
+
+        LOG_NET("Connecting to MQTT Broker at %s:%d as [%s]...", brokerCandidate, m_brokerPort, uniqueClientId.c_str());
+
+        // 2. Connect handshake: Only connect to verified online IPs
+        if (m_mqttClient.connect(uniqueClientId.c_str())) {
+            LOG_NET("MQTT Connected successfully to: %s!", brokerCandidate);
+            m_mqttClient.subscribe(m_cmdTopicGlobal.c_str());
+            m_mqttClient.subscribe(m_cmdTopicDevice.c_str());
+            LOG_NET("Subscribed to [%s] & [%s]", m_cmdTopicGlobal.c_str(), m_cmdTopicDevice.c_str());
+            connected = true;
+            break; // Exit candidate loop on successful connection
+        } else {
+            LOG_ERR("MQTT connect failed for %s, state=%d", brokerCandidate, m_mqttClient.state());
+        }
+    }
+
+    if (!connected) {
+        LOG_ERR("No active broker candidates could be reached on this network.");
     }
 }
 
@@ -69,6 +111,7 @@ void MQTTManager::update(bool isNetworkConnected, const char* brokerHost) {
         m_mqttClient.loop();
     }
 }
+
 
 bool MQTTManager::sendLog(const char* logMsg) {
     if (!m_mqttClient.connected() || m_isPublishingLog) return false;

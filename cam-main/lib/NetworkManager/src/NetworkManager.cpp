@@ -4,8 +4,12 @@
 
 NetworkManager::NetworkManager()
     : m_connected(false),
-      m_isHotspot(false),
-      m_mqttBroker(nullptr) {}
+      m_isHotspot(false) {
+    for (int i = 0; i < MAX_BROKERS_PER_SSID; i++) {
+        m_mqttBrokers[i] = nullptr;
+    }
+}
+
 
 void NetworkManager::begin() {
     WiFi.mode(WIFI_STA);
@@ -30,34 +34,41 @@ void NetworkManager::update() {
         if (!m_connected) {
             m_connected = true;
             updateBrokerForSSID(WiFi.SSID());
-            LOG_NET("Wi-Fi Connected to '%s'! IP: %s | Broker: %s", 
+            LOG_NET("Wi-Fi Connected to '%s'! IP: %s | Primary Broker: %s", 
                     WiFi.SSID().c_str(), 
                     WiFi.localIP().toString().c_str(), 
-                    m_mqttBroker ? m_mqttBroker : "none");
+                    m_mqttBrokers[0] ? m_mqttBrokers[0] : "none");
         }
     } else {
         if (m_connected) {
             m_connected = false;
-            m_mqttBroker = nullptr;
+            for (int i = 0; i < MAX_BROKERS_PER_SSID; i++) {
+                m_mqttBrokers[i] = nullptr;
+            }
             LOG_ERR("Wi-Fi Connection Lost! WiFiMulti background retrying...");
         }
-        // WiFiMulti handles background scanning, prioritization, and failover
         m_wifiMulti.run();
     }
 }
 
+
 void NetworkManager::updateBrokerForSSID(const String& ssid) {
     m_isHotspot = false;
-    m_mqttBroker = nullptr;
+    for (int i = 0; i < MAX_BROKERS_PER_SSID; i++) {
+        m_mqttBrokers[i] = nullptr;
+    }
 
     for (size_t i = 0; i < KNOWN_NETWORKS_COUNT; i++) {
         if (ssid.equalsIgnoreCase(KNOWN_NETWORKS[i].ssid)) {
             m_isHotspot = KNOWN_NETWORKS[i].isHotspot;
-            m_mqttBroker = KNOWN_NETWORKS[i].mqttBroker;
+            for (int b = 0; b < MAX_BROKERS_PER_SSID; b++) {
+                m_mqttBrokers[b] = KNOWN_NETWORKS[i].mqttBrokers[b];
+            }
             break;
-        }
+         }
     }
 }
+
 
 void NetworkManager::onWiFiEvent(WiFiEvent_t event, WiFiEventInfo_t info) {
     switch (event) {
@@ -84,6 +95,7 @@ String NetworkManager::getLocalIP() const {
     return WiFi.localIP().toString();
 }
 
-const char* NetworkManager::getMQTTBroker() const {
-    return m_mqttBroker;
+const char* NetworkManager::getMQTTBroker(uint8_t index) const {
+    if (index >= MAX_BROKERS_PER_SSID) return nullptr;
+    return m_mqttBrokers[index];
 }
