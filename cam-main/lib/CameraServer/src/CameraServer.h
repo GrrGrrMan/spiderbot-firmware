@@ -1,5 +1,6 @@
 #pragma once
 #include <Arduino.h>
+#include "cam_config.h" // CAM_STREAM_PORT (single source of truth for tunables)
 
 // ── V2 Hexapod — CameraServer (P2 MJPEG stream) ─────────────────────────────
 // Wraps the esp32-camera driver + esp_http_server to serve a browser-native
