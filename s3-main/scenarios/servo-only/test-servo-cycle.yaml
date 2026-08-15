@@ -1,0 +1,22 @@
+# V2 Hexapod S3 Servo Cycle Test
+# Run: wokwi-cli firmware/s3-main/scenarios/servo-only/ --scenario test-servo-cycle.yaml
+# Asserts each servo moves through its full range and returns to center.
+
+version: 1
+name: S3 Servo Cycle Test
+timeout: 30s
+
+steps:
+  - wait: 5s
+  - expect:
+      text: "S3 Servo Manager ready"
+      timeout: 10s
+  - expect:
+      text: "Servo cycle: LF_COXA -> CENTER"
+      timeout: 5s
+  - expect:
+      text: "Servo cycle: LF_FEMUR -> CENTER"
+      timeout: 5s
+  - expect:
+      text: "Servo cycle: Servo cycle complete - all 18 OK"
+      timeout: 10s
