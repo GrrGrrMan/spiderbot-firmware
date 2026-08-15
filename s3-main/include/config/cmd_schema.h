@@ -1,0 +1,30 @@
+#pragma once
+#include <ArduinoJson.h>
+#include "kinematics_config.h"
+
+#define CMD_TYPE_SERVO        "servo"
+#define CMD_TYPE_SERVO_BATCH  "servo_batch"
+#define CMD_TYPE_MOTION       "motion"
+#define CMD_TYPE_SYSTEM       "system"
+#define CMD_TYPE_POSE         "pose"
+#define CMD_TYPE_OTA          "ota" 
+
+inline void buildConfigPayload(JsonDocument& doc, const String& deviceId) {
+    doc["device_id"] = deviceId;
+    
+    JsonObject dims = doc["dimensions"].to<JsonObject>();
+    dims["coxia"]             = COXA_LENGTH_MM;
+    dims["femur"]             = FEMUR_LENGTH_MM;
+    dims["tibia"]             = TIBIA_LENGTH_MM;
+    dims["body_length"]       = BODY_LENGTH_MM;
+    dims["body_width_center"] = BODY_WIDTH_CENTER;
+    dims["body_width_corner"] = BODY_WIDTH_CORNER;
+
+    JsonArray angles = doc["mount_angles"].to<JsonArray>();
+    angles.add(MOUNT_ANGLE_RF);
+    angles.add(MOUNT_ANGLE_RM);
+    angles.add(MOUNT_ANGLE_RR);
+    angles.add(MOUNT_ANGLE_LR);
+    angles.add(MOUNT_ANGLE_LM);
+    angles.add(MOUNT_ANGLE_LF);
+}
