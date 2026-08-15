@@ -9,6 +9,7 @@
 #include "net_config.h"
 #include "logger.h"
 #include "command_handlers.h"
+#include "CameraServer.h"
 
 bool g_logEnabled = true;
 
@@ -23,6 +24,7 @@ volatile unsigned long g_lastCmdTime = 0;
 
 void TaskNetwork(void *pvParameters);
 void TaskControl(void *pvParameters);
+void TaskCameraStream(void *pvParameters);
 
 void setup() {
     Serial.begin(115200);
@@ -43,6 +45,7 @@ void setup() {
 
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask", 8192, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(TaskCameraStream, "CamTask", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
@@ -111,5 +114,18 @@ void TaskControl(void *pvParameters) {
 
         motionController.update(0.01f); 
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
+// ── P2 Camera MJPEG stream ───────────────────────────────────────────────────
+// Lives on core 0 (network core) so the 100 Hz control loop on core 1 is never
+// starved. The httpd server only captures frames while a browser is connected,
+// so an idle CAM costs ~nothing. Waits for WiFi/configuration to settle so the
+// config payload reports a real IP in mjpeg_url.
+void TaskCameraStream(void *pvParameters) {
+    vTaskDelay(pdMS_TO_TICKS(2500));
+    cameraServer.begin();
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
