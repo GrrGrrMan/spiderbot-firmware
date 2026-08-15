@@ -1,0 +1,9 @@
+# Wokwi CLI config for the s3-main servo-only scenario
+# https://docs.wokwi.com/wokwi-cli/configuration
+
+[wokwi]
+version = 1
+# Paths relative to THIS directory (scenarios/servo-only/).
+# Env is 'esp32s3' (NOT esp32cam) -> .pio/build/esp32s3/firmware.bin
+firmware = '../../.pio/build/esp32s3/firmware.bin'
+elf = '../../.pio/build/esp32s3/firmware.elf'
