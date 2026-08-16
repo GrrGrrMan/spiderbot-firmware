@@ -23,6 +23,12 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
     esp_err_t res = httpd_resp_set_type(req, CAM_STREAM_CONTENT_TYPE);
     if (res != ESP_OK) return res;
 
+    // CAM-free web-ui fix (2026-08-16): the web-ui consumes the stream with a
+    // CORS-mode fetch() (ReadableStream MJPEG parser -> blob: URL). That needs
+    // this header or the browser rejects the cross-origin request.
+    res = httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    if (res != ESP_OK) return res;
+
     const int64_t framePeriodUs = (int64_t)(1000000.0f / (float)CAM_TARGET_FPS);
     uint32_t frameCount = 0;
 
