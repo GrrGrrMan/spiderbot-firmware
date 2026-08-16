@@ -200,19 +200,20 @@ void MQTTManager::onMqttMessage(char* topic, byte* payload, unsigned int length)
         return;
     }
 
-    const char* type = doc["type"] | "unknown";
-
-    if (strcmp(type, "heartbeat") != 0) {
-        LOG_NET("MQTT Received [%s] -> Type: '%s'", topic, type);
+    if (strcmp(topic, s_instance->m_audioTopic.c_str()) == 0) {
+        // Audio topic frames route on "action" (beep/alarm/tts); log it
+        // accurately instead of the misleading doc["type"] == "unknown".
+        const char* action = doc["action"] | "unknown";
+        LOG_NET("MQTT Received [%s] -> Action: '%s'", topic, action);
+        if (s_instance->m_audioCallback) {
+            s_instance->m_audioCallback(String(action), doc);
+        }
+        return;
     }
 
-    // Dedicated audio-command topic routes on "action", not "type".
-    if (s_instance->m_audioTopic.length() &&
-        strcmp(topic, s_instance->m_audioTopic.c_str()) == 0 &&
-        s_instance->m_audioCallback) {
-        const char* action = doc["action"] | "unknown";
-        s_instance->m_audioCallback(String(action), doc);
-        return;
+    const char* type = doc["type"] | "unknown";
+    if (strcmp(type, "heartbeat") != 0) {
+        LOG_NET("MQTT Received [%s] -> Type: '%s'", topic, type);
     }
 
     if (s_instance->m_cmdCallback) {

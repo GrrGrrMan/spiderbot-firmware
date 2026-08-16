@@ -66,36 +66,55 @@ bool TTSStreamer::allocBuffer(size_t capacityBytes) {
 
 bool TTSStreamer::parseWavHeader() {
     const uint8_t* b = m_flow.wavBytes;
-    if (m_flow.wavSize < 44) return false;
-    if (memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return false;
+    if (m_flow.wavSize < 44) {
+        LOG_ERR("AUDIO TTS WAV too small: %u bytes", (unsigned)m_flow.wavSize);
+        return false;
+    }
+    if (memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) {
+        LOG_ERR("AUDIO TTS WAV bad RIFF/WAVE sig: '%.4s/%.4s' at 0/%u",
+                (const char*)b, (const char*)(b + 8), (unsigned)m_flow.wavSize);
+        return false;
+    }
 
     size_t off = 12;
     bool haveFmt = false;
     uint32_t dataOffset = 0;
+    uint16_t channelCount = 0, bitsPerSample = 0, audioFormat = 0;
+    uint32_t sampleRate = 0;
     while (off + 8 <= m_flow.wavSize) {
         uint32_t chunkSize = (uint32_t)b[off + 4] | ((uint32_t)b[off + 5] << 8) |
                              ((uint32_t)b[off + 6] << 16) | ((uint32_t)b[off + 7] << 24);
         if (memcmp(b + off, "fmt ", 4) == 0 && !haveFmt) {
-            uint16_t audioFormat = (uint16_t)(b[off + 8] | (b[off + 9] << 8));
-            m_flow.channels      = (uint16_t)(b[off + 10] | (b[off + 11] << 8));
-            m_flow.sampleRate    = (uint32_t)b[off + 12] | ((uint32_t)b[off + 13] << 8) |
-                                   ((uint32_t)b[off + 14] << 16) | ((uint32_t)b[off + 15] << 24);
-            m_flow.bitsPerSample = (uint16_t)(b[off + 22] | (b[off + 23] << 8));
+            audioFormat  = (uint16_t)(b[off + 8] | (b[off + 9] << 8));
+            channelCount = (uint16_t)(b[off + 10] | (b[off + 11] << 8));
+            sampleRate   = (uint32_t)b[off + 12] | ((uint32_t)b[off + 13] << 8) |
+                           ((uint32_t)b[off + 14] << 16) | ((uint32_t)b[off + 15] << 24);
+            bitsPerSample = (uint16_t)(b[off + 22] | (b[off + 23] << 8));
             haveFmt = true;
-            if (audioFormat != 1) return false;                 // PCM only
+            if (audioFormat != 1) {
+                LOG_ERR("AUDIO TTS WAV audioFormat=%u (want 1=PCM)", audioFormat);
+                return false;
+            }
         } else if (memcmp(b + off, "data", 4) == 0) {
             dataOffset = off + 8;
             break;
         }
         off += 8 + chunkSize + (chunkSize & 1);                 // pad to even
     }
-    if (!haveFmt || dataOffset == 0 || m_flow.bitsPerSample != 16) return false;
-    if (m_flow.sampleRate != AUDIO_SAMPLE_RATE || m_flow.channels != 1) {
-        LOG_ERR("AUDIO TTS WAV rejected: %luHz/%u ch (want %uHz/1)",
-                (unsigned long)m_flow.sampleRate, m_flow.channels, (unsigned)AUDIO_SAMPLE_RATE);
+    if (!haveFmt || dataOffset == 0 || bitsPerSample != 16) {
+        LOG_ERR("AUDIO TTS WAV incomplete: haveFmt=%d dataOff=%u bits=%u",
+                (int)haveFmt, (unsigned)dataOffset, bitsPerSample);
         return false;
     }
-    m_flow.dataOffset = dataOffset;
+    if (sampleRate != AUDIO_SAMPLE_RATE || channelCount != 1) {
+        LOG_ERR("AUDIO TTS WAV rejected: %luHz/%u ch (want %uHz/1)",
+                (unsigned long)sampleRate, channelCount, (unsigned)AUDIO_SAMPLE_RATE);
+        return false;
+    }
+    m_flow.channels      = channelCount;
+    m_flow.sampleRate    = sampleRate;
+    m_flow.bitsPerSample = bitsPerSample;
+    m_flow.dataOffset    = dataOffset;
     return true;
 }
 
