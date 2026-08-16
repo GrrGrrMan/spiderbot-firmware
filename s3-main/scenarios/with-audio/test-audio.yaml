@@ -1,0 +1,25 @@
+# V2 Hexapod S3 Audio (MAX98357) I2S Test
+# Run: wokwi-cli firmware/s3-main/scenarios/with-audio/ --scenario test-audio.yaml
+# Wokwi cannot emit sound; this asserts the I2S peripheral path via firmware logs:
+#   I2S driver install + pin set ("AUDIO I2S ready"),
+#   a sine beep write ("AUDIO beep ..."),
+#   an alarm playback ("AUDIO alarm 'idle' played").
+
+version: 1
+name: S3 Audio I2S Test
+timeout: 40s
+
+steps:
+  - wait: 6s
+  - expect:
+      text: "S3 Servo Manager ready"
+      timeout: 10s
+  - expect:
+      text: "AUDIO I2S ready"
+      timeout: 15s
+  - expect:
+      text: "AUDIO beep"
+      timeout: 10s
+  - expect:
+      text: "AUDIO alarm 'idle' played"
+      timeout: 10s

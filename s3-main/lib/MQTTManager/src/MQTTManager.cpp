@@ -14,7 +14,8 @@ MQTTManager::MQTTManager()
       m_lastRetryMs(0),
       m_lastTelemetryMs(0),
       m_isPublishingLog(false),
-      m_cmdCallback(nullptr) {
+      m_cmdCallback(nullptr),
+      m_audioCallback(nullptr) {
     s_instance = this;
 }
 
@@ -27,6 +28,8 @@ void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
     m_cmdTopicDevice = "hexapod/" + m_deviceId + "/cmd";
     m_telemetryTopic = "hexapod/" + m_deviceId + "/telemetry";
     m_logTopic       = "hexapod/" + m_deviceId + "/logs";
+    m_audioTopic     = "hexapod/" + m_deviceId + "/audio";
+    m_audioStatusTopic = "hexapod/" + m_deviceId + "/audio/status";
 
     m_mqttClient.setCallback(MQTTManager::onMqttMessage);
     m_mqttClient.setBufferSize(1024);
@@ -34,6 +37,10 @@ void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
 
 void MQTTManager::setCommandCallback(CommandCallback cb) {
     m_cmdCallback = cb;
+}
+
+void MQTTManager::setAudioCommandCallback(AudioCommandCallback cb) {
+    m_audioCallback = cb;
 }
 
 void MQTTManager::reconnect(const char* brokerHost) {
@@ -85,7 +92,8 @@ void MQTTManager::reconnect(const char* brokerHost) {
             LOG_NET("MQTT Connected successfully to: %s!", brokerCandidate);
             m_mqttClient.subscribe(m_cmdTopicGlobal.c_str());
             m_mqttClient.subscribe(m_cmdTopicDevice.c_str());
-            LOG_NET("Subscribed to [%s] & [%s]", m_cmdTopicGlobal.c_str(), m_cmdTopicDevice.c_str());
+            m_mqttClient.subscribe(m_audioTopic.c_str());
+            LOG_NET("Subscribed to [%s] & [%s] & [%s]", m_cmdTopicGlobal.c_str(), m_cmdTopicDevice.c_str(), m_audioTopic.c_str());
             connected = true;
             break; // Exit candidate loop on successful connection
         } else {
@@ -121,6 +129,20 @@ bool MQTTManager::sendLog(const char* logMsg) {
     m_isPublishingLog = false;
     
     return success;
+}
+
+bool MQTTManager::sendAudioStatus(const char* state, const char* action) {
+    if (!m_mqttClient.connected()) return false;
+
+    JsonDocument doc;
+    doc["state"] = state;
+    if (action) doc["action"] = action;
+
+    char buffer[128];
+    size_t bytesWritten = serializeJson(doc, buffer, sizeof(buffer));
+    if (bytesWritten == 0) return false;
+
+    return m_mqttClient.publish(m_audioStatusTopic.c_str(), buffer);
 }
 
 bool MQTTManager::sendTelemetry(const JsonDocument& doc) {
@@ -180,6 +202,15 @@ void MQTTManager::onMqttMessage(char* topic, byte* payload, unsigned int length)
 
     if (strcmp(type, "heartbeat") != 0) {
         LOG_NET("MQTT Received [%s] -> Type: '%s'", topic, type);
+    }
+
+    // Dedicated audio-command topic routes on "action", not "type".
+    if (s_instance->m_audioTopic.length() &&
+        strcmp(topic, s_instance->m_audioTopic.c_str()) == 0 &&
+        s_instance->m_audioCallback) {
+        const char* action = doc["action"] | "unknown";
+        s_instance->m_audioCallback(String(action), doc);
+        return;
     }
 
     if (s_instance->m_cmdCallback) {

@@ -23,6 +23,8 @@
 #include "servo_config.h"
 #include "logger.h"
 #include "command_handlers.h"
+#include "AudioManager.h"
+#include "audio_config.h"
 
 bool g_logEnabled = true;
 
@@ -31,6 +33,7 @@ MQTTManager mqttManager;
 ServoManager servoManager;
 MotionController motionController(servoManager);
 CommandDispatcher cmdDispatcher;
+AudioManager audioManager;
 
 volatile unsigned long g_lastCmdTime = 0;
 
@@ -66,6 +69,18 @@ static void runBootServoCycle() {
     Serial.println("Servo cycle: Servo cycle complete - all 18 OK");
 }
 
+// Boot-time audio self-test: initializes I2S and plays a short chirp + idle alarm.
+// This is the Wokwi-verifiable hook for scenarios/with-audio (Wokwi can't emit
+// sound, but the I2S write/bytes logs prove the audio path runs).
+static void runBootAudioTest() {
+    if (!audioManager.begin()) {
+        LOG_ERR("AUDIO boot self-test aborted: I2S init failed");
+        return;
+    }
+    audioManager.playTone(440, 120);   // boot chirp  -> "AUDIO beep (...)"
+    audioManager.playAlarm("idle");    //             -> "AUDIO alarm 'idle' played"
+}
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -81,6 +96,35 @@ void setup() {
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
         g_lastCmdTime = millis(); // Reset watchdog on ANY incoming command
         cmdDispatcher.dispatch(type, doc);
+    });
+
+    // Audio commands arrive on hexapod/{id}/audio (keyed by "action", not "type").
+    // NOTE: deliberately does NOT touch g_lastCmdTime — audio is independent of the
+    // servo safety watchdog (I-4), so a speaker request must never keep motion alive.
+    mqttManager.setAudioCommandCallback([](const String& action, JsonDocument& doc) {
+        if (action == "beep") {
+            mqttManager.sendAudioStatus("playing", "beep");
+            audioManager.playTone(1200, 120);
+            mqttManager.sendAudioStatus("idle", "beep");
+        } else if (action == "alarm") {
+            const char* name = doc["payload"] | "";
+            if (strlen(name) > 0) {
+                mqttManager.sendAudioStatus("playing", "alarm");
+                audioManager.playAlarm(name);
+                mqttManager.sendAudioStatus("idle", "alarm");
+            }
+        } else if (action == "play") {
+            mqttManager.sendAudioStatus("playing", "play");
+            audioManager.playTone(660, 120);
+            mqttManager.sendAudioStatus("idle", "play");
+        } else if (action == "tts") {
+            // Full TTS (base64 WAV -> PSRAM -> DMA stream) is the PHYSICAL-path
+            // deliverable (3.3). Offline we acknowledge; the pipe is proven on Monday.
+            LOG_SYS("AUDIO 'tts' action received; full decode deferred to physical path");
+            mqttManager.sendAudioStatus("idle", "tts");
+        } else {
+            LOG_ERR("Unknown audio action: '%s'", action.c_str());
+        }
     });
 
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask", 8192, NULL, 1, NULL, 0);
@@ -137,6 +181,7 @@ void TaskControl(void *pvParameters) {
     servoManager.begin();
     LOG_SYS("S3 Servo Manager ready");
     runBootServoCycle();
+    runBootAudioTest();
     motionController.begin();
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
