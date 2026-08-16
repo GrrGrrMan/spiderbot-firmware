@@ -1,0 +1,158 @@
+#include "TTSStreamer.h"
+#include "logger.h"
+
+void TTSStreamer::begin() {
+    m_flow.wavBytes = nullptr;
+    m_flow.wavSize = 0;
+    m_flow.sampleRate = 0;
+    m_flow.channels = 0;
+    m_flow.bitsPerSample = 0;
+    m_flow.dataOffset = 0;
+    m_expectedTotal = 0;
+    m_written = 0;
+    m_capacity = 0;
+    m_assembling = false;
+    m_complete = false;
+}
+
+// --- base64 ----------------------------------------------------------------
+
+uint8_t TTSStreamer::b64Value(char c) {
+    if (c >= 'A' && c <= 'Z') return c - 'A';
+    if (c >= 'a' && c <= 'z') return c - 'a' + 26;
+    if (c >= '0' && c <= '9') return c - '0' + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    return 0xFF; // non-base64 / padding
+}
+
+bool TTSStreamer::decodeBase64(const String& in, uint8_t* out, size_t maxOut, size_t& outLen) {
+    outLen = 0;
+    uint32_t acc = 0;
+    uint8_t nBits = 0;
+    for (size_t i = 0; i < in.length(); i++) {
+        char c = in[i];
+        if (c == '=') break;             // padding
+        uint8_t v = b64Value(c);
+        if (v == 0xFF) return false;     // invalid char
+        acc = (acc << 6) | v;
+        nBits += 6;
+        if (nBits >= 8) {
+            nBits -= 8;
+            if (outLen >= maxOut) return false;
+            out[outLen++] = (uint8_t)((acc >> nBits) & 0xFF);
+        }
+    }
+    return true;
+}
+
+// --- buffer allocation (PSRAM first, internal heap fallback) -------------
+
+bool TTSStreamer::allocBuffer(size_t capacityBytes) {
+    if (m_flow.wavBytes) free(m_flow.wavBytes);
+    m_flow.wavBytes = nullptr;
+
+    if (capacityBytes > TTS_MAX_FLOW_BYTES) return false;
+
+    void* ptr = ps_malloc(capacityBytes);
+    if (!ptr) ptr = malloc(capacityBytes);
+    if (!ptr) return false;
+    m_flow.wavBytes = (uint8_t*)ptr;
+    m_flow.wavSize = 0;
+    m_capacity = capacityBytes;
+    return true;
+}
+// --- WAV header parse -------------------------------------------------------
+
+bool TTSStreamer::parseWavHeader() {
+    const uint8_t* b = m_flow.wavBytes;
+    if (m_flow.wavSize < 44) return false;
+    if (memcmp(b, "RIFF", 4) != 0 || memcmp(b + 8, "WAVE", 4) != 0) return false;
+
+    size_t off = 12;
+    bool haveFmt = false;
+    uint32_t dataOffset = 0;
+    while (off + 8 <= m_flow.wavSize) {
+        uint32_t chunkSize = (uint32_t)b[off + 4] | ((uint32_t)b[off + 5] << 8) |
+                             ((uint32_t)b[off + 6] << 16) | ((uint32_t)b[off + 7] << 24);
+        if (memcmp(b + off, "fmt ", 4) == 0 && !haveFmt) {
+            uint16_t audioFormat = (uint16_t)(b[off + 8] | (b[off + 9] << 8));
+            m_flow.channels      = (uint16_t)(b[off + 10] | (b[off + 11] << 8));
+            m_flow.sampleRate    = (uint32_t)b[off + 12] | ((uint32_t)b[off + 13] << 8) |
+                                   ((uint32_t)b[off + 14] << 16) | ((uint32_t)b[off + 15] << 24);
+            m_flow.bitsPerSample = (uint16_t)(b[off + 22] | (b[off + 23] << 8));
+            haveFmt = true;
+            if (audioFormat != 1) return false;                 // PCM only
+        } else if (memcmp(b + off, "data", 4) == 0) {
+            dataOffset = off + 8;
+            break;
+        }
+        off += 8 + chunkSize + (chunkSize & 1);                 // pad to even
+    }
+    if (!haveFmt || dataOffset == 0 || m_flow.bitsPerSample != 16) return false;
+    if (m_flow.sampleRate != AUDIO_SAMPLE_RATE || m_flow.channels != 1) {
+        LOG_ERR("AUDIO TTS WAV rejected: %luHz/%u ch (want %uHz/1)",
+                (unsigned long)m_flow.sampleRate, m_flow.channels, (unsigned)AUDIO_SAMPLE_RATE);
+        return false;
+    }
+    m_flow.dataOffset = dataOffset;
+    return true;
+}
+
+// --- frame feeding -----------------------------------------------------------
+
+TTSStreamer::FeedResult TTSStreamer::feed(const String& flowId, uint16_t seq, uint16_t total, const String& b64Payload) {
+    if (b64Payload.length() == 0 || total == 0) return FeedResult::ERROR;
+
+    // A new/different flow supersedes any previous assembly.
+    if (!m_assembling || m_activeFlowId != flowId) {
+        resetFlow();
+        m_activeFlowId = flowId;
+        m_expectedTotal = total;
+        size_t capacity = ((size_t)total * b64Payload.length() * 3 / 4) + 64;
+        if (!allocBuffer(capacity)) {
+            LOG_ERR("AUDIO TTS PSRAM alloc failed for %u frames", total);
+            return FeedResult::ERROR;
+        }
+        m_assembling = true;
+    }
+
+    if (seq >= m_expectedTotal) return FeedResult::ERROR;      // out of range
+
+    size_t got = 0;
+    if (!decodeBase64(b64Payload, m_flow.wavBytes + m_written, m_capacity - m_written, got)) {
+        LOG_ERR("AUDIO TTS base64 decode failed (seq=%u)", seq);
+        return FeedResult::ERROR;
+    }
+    m_written += got;
+    m_flow.wavSize = m_written;
+
+    if (seq + 1 == m_expectedTotal) {
+        if (!parseWavHeader()) {
+            LOG_ERR("AUDIO TTS WAV parse failed for flow '%s'", flowId.c_str());
+            return FeedResult::ERROR;
+        }
+        m_complete = true;
+        m_assembling = false;
+        LOG_SYS("AUDIO TTS flow '%s' assembled (%u bytes, %uHz/%u ch/%u-bit)",
+                flowId.c_str(), (unsigned)m_flow.wavSize, (unsigned)m_flow.sampleRate,
+                m_flow.channels, m_flow.bitsPerSample);
+        return FeedResult::FLOW_COMPLETE;
+    }
+    return FeedResult::OK;
+}
+
+void TTSStreamer::releaseFlow() {
+    if (m_flow.wavBytes) free(m_flow.wavBytes);
+    m_flow.wavBytes = nullptr;
+    m_flow.wavSize = 0;
+    m_flow.dataOffset = 0;
+    m_capacity = 0;
+    m_complete = false;
+    m_assembling = false;
+    m_activeFlowId = "";
+}
+
+void TTSStreamer::resetFlow() {
+    releaseFlow();
+}

@@ -32,7 +32,9 @@ void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
     m_audioStatusTopic = "hexapod/" + m_deviceId + "/audio/status";
 
     m_mqttClient.setCallback(MQTTManager::onMqttMessage);
-    m_mqttClient.setBufferSize(1024);
+    // P5: audio topic carries chunked TTS frames (~4 KB base64 payload).
+    // 8 KB comfortably holds one frame + JSON envelope (PubSubClient caps at 64 KB).
+    m_mqttClient.setBufferSize(8192);
 }
 
 void MQTTManager::setCommandCallback(CommandCallback cb) {

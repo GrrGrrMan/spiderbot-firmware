@@ -1,0 +1,32 @@
+# V2 Hexapod S3 Audio — P5 chunked TTS pipeline test (Wokwi)
+# Run: PLATFORMIO_BUILD_FLAGS="-DAUDIO_SIM_MODE=1 -DTTS_SIM_SELFTEST=1" pio run -e esp32s3
+#      wokwi-cli firmware/s3-main/scenarios/with-audio/ --scenario test-tts.yaml
+# Asserts the full P5 flow with NO broker needed: the firmware synthesizes a
+# tiny 22050 Hz mono WAV, base64-frames it like the RPi ai-service (4 KB slices),
+# assembles in PSRAM via TTSStreamer, and streams to "I2S" (sim) via TaskAudio:
+#   AUDIO TTS selftest: feeding ...
+#   AUDIO TTS flow 'selftest' assembled (<bytes> bytes, 22050Hz/1 ch/16-bit)
+#   AUDIO TTS playing <n> samples (22050Hz/1 ch)
+#   AUDIO TTS playback complete
+
+version: 1
+name: S3 Chunked TTS Pipeline (P5)
+timeout: 60s
+
+steps:
+  - wait: 8s
+  - expect:
+      text: "S3 Servo Manager ready"
+      timeout: 20s
+  - expect:
+      text: "AUDIO I2S ready"
+      timeout: 20s
+  - expect:
+      text: "AUDIO TTS selftest: feeding"
+      timeout: 15s
+  - expect:
+      text: "AUDIO TTS flow 'selftest' assembled"
+      timeout: 15s
+  - expect:
+      text: "AUDIO TTS playback complete"
+      timeout: 15s

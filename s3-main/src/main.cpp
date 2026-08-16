@@ -25,6 +25,7 @@
 #include "command_handlers.h"
 #include "AudioManager.h"
 #include "audio_config.h"
+#include "TTSStreamer.h"
 
 bool g_logEnabled = true;
 
@@ -34,11 +35,15 @@ ServoManager servoManager;
 MotionController motionController(servoManager);
 CommandDispatcher cmdDispatcher;
 AudioManager audioManager;
+TTSStreamer ttsStreamer;
 
 volatile unsigned long g_lastCmdTime = 0;
+QueueHandle_t g_audioQueue = nullptr;          // kicks TaskAudio (1 token per complete TTS flow)
+volatile bool g_audioDonePending = false;      // set by TaskAudio, consumed by TaskNetwork for MQTT idle status
 
 void TaskNetwork(void *pvParameters);
 void TaskControl(void *pvParameters);
+void TaskAudio(void *pvParameters);
 
 // Boot-time servo cycle test: sweep each of the 18 servos out to +200us and
 // back to center, logging the exact lines the Wokwi YAML asserts. Iterates in
@@ -81,6 +86,81 @@ static void runBootAudioTest() {
     audioManager.playAlarm("idle");    //             -> "AUDIO alarm 'idle' played"
 }
 
+#if TTS_SIM_SELFTEST
+// Small base64 encoder (selftest only; the RPi publish path uses piper + python).
+static void b64EncodeChunk(const uint8_t* src, size_t n, char* dst) {
+    static const char T[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    size_t d = 0, s = 0;
+    while (s + 3 <= n) {
+        uint32_t v = ((uint32_t)src[s] << 16) | ((uint32_t)src[s + 1] << 8) | src[s + 2];
+        dst[d++] = T[(v >> 18) & 63]; dst[d++] = T[(v >> 12) & 63];
+        dst[d++] = T[(v >> 6) & 63];  dst[d++] = T[v & 63];
+        s += 3;
+    }
+    size_t rem = n - s;
+    if (rem == 1) {
+        uint32_t v = (uint32_t)src[s] << 16;
+        dst[d++] = T[(v >> 18) & 63]; dst[d++] = T[(v >> 12) & 63];
+        dst[d++] = '='; dst[d++] = '=';
+    } else if (rem == 2) {
+        uint32_t v = ((uint32_t)src[s] << 16) | ((uint32_t)src[s + 1] << 8);
+        dst[d++] = T[(v >> 18) & 63]; dst[d++] = T[(v >> 12) & 63];
+        dst[d++] = T[(v >> 6) & 63];  dst[d++] = '=';
+    }
+    dst[d] = 0;
+}
+
+// Wokwi-only: synthesizes a tiny 22050 Hz mono 16-bit sine WAV and feeds it to
+// TTSStreamer through the exact same 4 KB base64 frame path the RPi ai-service
+// uses over MQTT, then kicks TaskAudio. Asserted by scenarios/with-audio/test-tts.yaml.
+static void runBootTtsSelftest() {
+    static uint8_t wav[64 + AUDIO_SAMPLE_RATE * 2];     // ~1s cap
+    uint32_t numSamples = (uint32_t)(AUDIO_SAMPLE_RATE * 300 / 1000);  // 0.3s
+    size_t dataSize = numSamples * 2;
+    size_t total = 44 + dataSize;
+
+    memcpy(wav, "RIFF", 4);
+    uint32_t riff = (uint32_t)(total - 8);
+    wav[4] = riff & 0xFF; wav[5] = (riff >> 8) & 0xFF; wav[6] = (riff >> 16) & 0xFF; wav[7] = (riff >> 24) & 0xFF;
+    memcpy(wav + 8, "WAVE", 4);
+    memcpy(wav + 12, "fmt ", 4);
+    wav[16] = 16; wav[17] = 0; wav[18] = 0; wav[19] = 0;
+    wav[20] = 1; wav[21] = 0;                            // PCM
+    wav[22] = 1; wav[23] = 0;                            // mono
+    wav[24] = AUDIO_SAMPLE_RATE & 0xFF; wav[25] = (AUDIO_SAMPLE_RATE >> 8) & 0xFF;
+    wav[26] = (AUDIO_SAMPLE_RATE >> 16) & 0xFF; wav[27] = (AUDIO_SAMPLE_RATE >> 24) & 0xFF;
+    uint32_t byteRate = (uint32_t)AUDIO_SAMPLE_RATE * 2;
+    wav[28] = byteRate & 0xFF; wav[29] = (byteRate >> 8) & 0xFF; wav[30] = (byteRate >> 16) & 0xFF; wav[31] = (byteRate >> 24) & 0xFF;
+    wav[32] = 2; wav[33] = 0;                            // block align
+    wav[34] = 16; wav[35] = 0;                           // bits
+    memcpy(wav + 36, "data", 4);
+    wav[40] = dataSize & 0xFF; wav[41] = (dataSize >> 8) & 0xFF;
+    wav[42] = (dataSize >> 16) & 0xFF; wav[43] = (dataSize >> 24) & 0xFF;
+    for (size_t i = 0; i < numSamples; i++) {
+        int16_t s = (int16_t)(20000.0f * sinf(2.0f * (float)M_PI * 440.0f * (float)i / (float)AUDIO_SAMPLE_RATE));
+        wav[44 + i * 2] = (uint8_t)(s & 0xFF);
+        wav[45 + i * 2] = (uint8_t)((s >> 8) & 0xFF);
+    }
+
+    LOG_SYS("AUDIO TTS selftest: feeding %u WAV bytes via 3KB b64 frames", (unsigned)total);
+    static char frameB64[TTS_FRAME_MAX_B64 + 1];   // static: 4 KB must NOT sit on the 4 KB ControlTask stack
+    uint16_t totalFrames = (uint16_t)((total + 3071) / 3072);
+    for (uint16_t seq = 0; seq < totalFrames; seq++) {
+        size_t off = (size_t)seq * 3072;
+        size_t n = (off + 3072 <= total) ? 3072 : (total - off);
+        b64EncodeChunk(wav + off, n, frameB64);
+        TTSStreamer::FeedResult r = ttsStreamer.feed("selftest", seq, totalFrames, String(frameB64));
+        if (r == TTSStreamer::FeedResult::ERROR) {
+            LOG_ERR("AUDIO TTS selftest FAILED at seq %u/%u", seq, totalFrames);
+            return;
+        }
+    }
+    uint32_t token = 1;
+    if (g_audioQueue) xQueueSend(g_audioQueue, &token, 0);
+    LOG_SYS("AUDIO TTS selftest queued for TaskAudio playback");
+}
+#endif // TTS_SIM_SELFTEST
+
 void setup() {
     Serial.begin(115200);
     delay(1000);
@@ -118,17 +198,35 @@ void setup() {
             audioManager.playTone(660, 120);
             mqttManager.sendAudioStatus("idle", "play");
         } else if (action == "tts") {
-            // Full TTS (base64 WAV -> PSRAM -> DMA stream) is the PHYSICAL-path
-            // deliverable (3.3). Offline we acknowledge; the pipe is proven on Monday.
-            LOG_SYS("AUDIO 'tts' action received; full decode deferred to physical path");
-            mqttManager.sendAudioStatus("idle", "tts");
+            // P5 chunked TTS: RPi Piper WAV split into base64 frames
+            // {flow_id, seq, total, payload}. Assemble in PSRAM (never in the
+            // command/watchdog path) and kick TaskAudio for I2S streaming.
+            String  flowId  = doc["flow_id"] | "";
+            uint16_t seq    = doc["seq"]    | 0;
+            uint16_t total  = doc["total"]  | 0;
+            String  payload = doc["payload"] | "";
+
+            TTSStreamer::FeedResult res = ttsStreamer.feed(flowId, seq, total, payload);
+            if (res == TTSStreamer::FeedResult::FLOW_COMPLETE) {
+                mqttManager.sendAudioStatus("playing", "tts");
+                uint32_t token = 1;
+                if (g_audioQueue) xQueueSend(g_audioQueue, &token, 0);
+            } else if (res == TTSStreamer::FeedResult::ERROR) {
+                LOG_ERR("AUDIO TTS error (flow=%s seq=%u/%u len=%u)", flowId.c_str(), seq, total, payload.length());
+                ttsStreamer.resetFlow();
+                mqttManager.sendAudioStatus("error", "tts");
+            }
         } else {
             LOG_ERR("Unknown audio action: '%s'", action.c_str());
         }
     });
 
+    g_audioQueue = xQueueCreate(2, sizeof(uint32_t));
+    ttsStreamer.begin();
+
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask", 8192, NULL, 1, NULL, 0);
     xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 2, NULL, 1);
+    xTaskCreatePinnedToCore(TaskAudio, "AudioTask", 8192, NULL, 1, NULL, 1);
 }
 
 void loop() {
@@ -171,6 +269,14 @@ void TaskNetwork(void *pvParameters) {
             telemetry["power"]     = servoManager.isOutputsEnabled();
 
             mqttManager.sendTelemetry(telemetry);
+
+            // TaskAudio finished a TTS flow -> publish 'idle' here (core 0),
+            // so all MQTT writes stay on the network task (PubSubClient is not
+            // concurrent-safe across tasks).
+            if (g_audioDonePending) {
+                g_audioDonePending = false;
+                mqttManager.sendAudioStatus("idle", "tts");
+            }
         }
 
         vTaskDelay(pdMS_TO_TICKS(100));
@@ -182,6 +288,9 @@ void TaskControl(void *pvParameters) {
     LOG_SYS("S3 Servo Manager ready");
     runBootServoCycle();
     runBootAudioTest();
+#if TTS_SIM_SELFTEST
+    runBootTtsSelftest();
+#endif
     motionController.begin();
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
@@ -200,5 +309,26 @@ void TaskControl(void *pvParameters) {
 
         motionController.update(0.01f);
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    }
+}
+
+// Dedicated I2S playback task (P5 TTS): consumes complete flows from
+// TTSStreamer and streams PCM to the MAX98357. Intentional backpressure —
+// i2s_write blocks here while TaskNetwork (core 0) keeps MQTT alive.
+void TaskAudio(void *pvParameters) {
+    uint32_t token;
+    for (;;) {
+        if (xQueueReceive(g_audioQueue, &token, portMAX_DELAY) != pdTRUE) continue;
+        if (!ttsStreamer.hasCompleteFlow()) continue;
+
+        const TTSStreamer::Flow& flow = ttsStreamer.flow();
+        LOG_SYS("AUDIO TTS playing %u samples (%luHz/%u ch)",
+                (unsigned)flow.pcmSampleCount(), (unsigned long)flow.sampleRate, flow.channels);
+        audioManager.playPcm(flow.pcm(), flow.pcmSampleCount());
+        ttsStreamer.releaseFlow();
+
+        // Defer the MQTT 'idle' publish to TaskNetwork (single-writer rule).
+        g_audioDonePending = true;
+        LOG_SYS("AUDIO TTS playback complete");
     }
 }
