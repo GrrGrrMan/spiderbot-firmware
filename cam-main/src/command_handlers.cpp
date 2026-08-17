@@ -12,6 +12,7 @@ void registerAllCommandHandlers(
     MotionController& motionCtrl,
     MQTTManager& mqttMgr
 ) {
+#ifdef CAM_ENABLE_SERVO
     dispatcher.registerHandler("heartbeat", [](const JsonDocument& doc) {
         // updates g_lastCmdTime in setup()
     });
@@ -28,12 +29,12 @@ void registerAllCommandHandlers(
     // 2. Batch Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
         motionCtrl.setRawServoMode(true);
-        
+
         JsonArrayConst servos = doc["servos"].as<JsonArrayConst>();
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
             uint16_t rawPulse = s["pulse_us"] | 1500;
-            servoMgr.setServoPulseUs(ch, rawPulse); // 
+            servoMgr.setServoPulseUs(ch, rawPulse); //
         }
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
@@ -107,7 +108,8 @@ void registerAllCommandHandlers(
         }
         LOG_MOT("Applied direct angle pose from Web UI.");
     });
-    
+#endif // CAM_ENABLE_SERVO
+
     // 4. System Logging Handler
     dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr, &servoMgr](const JsonDocument& doc) {
         if (doc["logging"].is<bool>()) {
@@ -121,10 +123,12 @@ void registerAllCommandHandlers(
                 LOG_SYS("Configuration handshake published on request.");
             }
         }
+#ifdef CAM_ENABLE_SERVO
         if (doc["power"].is<bool>()) {
             bool powerState = doc["power"].as<bool>();
             servoMgr.setOutputsEnabled(powerState);
         }
+#endif
     });
 
     // 5. OTA Update Handler

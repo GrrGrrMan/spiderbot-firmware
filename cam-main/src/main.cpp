@@ -23,28 +23,41 @@ volatile unsigned long g_lastCmdTime = 0;
 
 
 void TaskNetwork(void *pvParameters);
+#ifdef CAM_ENABLE_SERVO
 void TaskControl(void *pvParameters);
+#endif
 void TaskCameraStream(void *pvParameters);
 
 void setup() {
     Serial.begin(115200);
     delay(1000);
-    
+
     g_logSink.begin(25);
+#ifdef CAM_ENABLE_SERVO
     LOG_SYS("Booting esp-cam-main with Onboard Kinematics Engine...");
+#else
+    LOG_SYS("Booting esp-cam-main in CAMERA-ONLY mode (no servos, no motion)...");
+#endif
 
     otaManager.begin();
 
-    // Register handlers passing the motion controller reference
+    // Register handlers passing the motion controller reference. When
+    // CAM_ENABLE_SERVO is undefined (P6b cutover), only the camera-side
+    // handlers (system/ota/heartbeat) are wired up; servo/motion handlers
+    // are dropped so CAM cannot move anything even if a stale topic slips in.
     registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController, mqttManager);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
+#ifdef CAM_ENABLE_SERVO
         g_lastCmdTime = millis(); // Reset watchdog on ANY incoming command
+#endif
         cmdDispatcher.dispatch(type, doc);
     });
 
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask", 8192, NULL, 1, NULL, 0);
+#ifdef CAM_ENABLE_SERVO
     xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 2, NULL, 1);
+#endif
     xTaskCreatePinnedToCore(TaskCameraStream, "CamTask", 4096, NULL, 1, NULL, 0);
 }
 
@@ -85,7 +98,12 @@ void TaskNetwork(void *pvParameters) {
             telemetry["rssi"]      = WiFi.RSSI();
             telemetry["ip"]        = netManager.getLocalIP();
             telemetry["hotspot"]   = netManager.isHotspot();
+#ifdef CAM_ENABLE_SERVO
             telemetry["power"]     = servoManager.isOutputsEnabled();
+#else
+            // Camera-only build: servos are not initialized, so omit the
+            // field entirely rather than read an uninitialized bool.
+#endif
 
             mqttManager.sendTelemetry(telemetry);
         }
@@ -95,6 +113,7 @@ void TaskNetwork(void *pvParameters) {
 }
 
 void TaskControl(void *pvParameters) {
+#ifdef CAM_ENABLE_SERVO
     servoManager.begin();
     motionController.begin();
 
@@ -112,9 +131,10 @@ void TaskControl(void *pvParameters) {
             LOG_ERR("Watchdog Timeout! Connection lost. Halting motion and disabling servos.");
         }
 
-        motionController.update(0.01f); 
+        motionController.update(0.01f);
         vTaskDelayUntil(&xLastWakeTime, xFrequency);
     }
+#endif // CAM_ENABLE_SERVO
 }
 
 // ── P2 Camera MJPEG stream ───────────────────────────────────────────────────
