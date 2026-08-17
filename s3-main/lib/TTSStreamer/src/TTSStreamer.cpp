@@ -60,6 +60,7 @@ bool TTSStreamer::allocBuffer(size_t capacityBytes) {
     m_flow.wavBytes = (uint8_t*)ptr;
     m_flow.wavSize = 0;
     m_capacity = capacityBytes;
+    m_written = 0;              // fresh buffer always starts at offset 0
     return true;
 }
 // --- WAV header parse -------------------------------------------------------
@@ -167,6 +168,12 @@ void TTSStreamer::releaseFlow() {
     m_flow.wavSize = 0;
     m_flow.dataOffset = 0;
     m_capacity = 0;
+    m_written = 0;              // CRITICAL: must reset so the next flow decodes
+                                // from offset 0. Before this fix, the stale
+                                // m_written from the previous flow made the next
+                                // feed() decode into wavBytes+stale with a tiny
+                                // remaining maxOut -> decodeBase64 overflow ->
+                                // 'first audio works, second silent' bug.
     m_complete = false;
     m_assembling = false;
     m_activeFlowId = "";

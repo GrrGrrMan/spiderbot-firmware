@@ -38,8 +38,32 @@ AudioManager audioManager;
 TTSStreamer ttsStreamer;
 
 volatile unsigned long g_lastCmdTime = 0;
-QueueHandle_t g_audioQueue = nullptr;          // kicks TaskAudio (1 token per complete TTS flow)
-volatile bool g_audioDonePending = false;      // set by TaskAudio, consumed by TaskNetwork for MQTT idle status
+
+// Single-writer audio contract: TaskAudio is the ONLY thread that touches
+// audioManager and ttsStreamer. Both MQTT-driven audio commands (beep/alarm/
+// tts) and the boot chirp land here. TaskNetwork (MQTT callback) only
+// pushes an AudioCommand token; it never blocks on i2s_write. This fixes
+// the 'first try works, second silent' bug caused by:
+//   (a) MQTT callback blocking 100s of ms in i2s_write (dropping frames)
+//   (b) use-after-free: TaskAudio reads ttsStreamer.flow() then TaskNetwork
+//       frees the same buffer when a new flow starts arriving
+//   (c) two tasks racing on the same i2s_port / DMA buffer
+enum class AudioCommandType : uint8_t {
+    TONE  = 0,   // playTone(freqHz, ms)
+    ALARM = 1,   // playAlarm(name)
+    TTS   = 2,   // TTS flow ready in ttsStreamer; consume + play
+};
+struct AudioCommand {
+    AudioCommandType type;
+    uint16_t         freqHz;    // TONE
+    uint16_t         ms;        // TONE
+    char             alarmName[16];  // ALARM (null-terminated)
+};
+static QueueHandle_t g_audioQueue = nullptr;            // carries AudioCommand, depth 4
+static volatile bool g_audioDonePending = false;        // set by TaskAudio, consumed by TaskNetwork for MQTT idle status
+static char g_audioIdleAction[16] = {0};                // action of the finished playback ("tts"/"beep"/"alarm")
+                                                        // written by TaskAudio BEFORE setting g_audioDonePending,
+                                                        // read by TaskNetwork AFTER it sees the flag (single-writer)
 
 void TaskNetwork(void *pvParameters);
 void TaskControl(void *pvParameters);
@@ -155,8 +179,9 @@ static void runBootTtsSelftest() {
             return;
         }
     }
-    uint32_t token = 1;
-    if (g_audioQueue) xQueueSend(g_audioQueue, &token, 0);
+    AudioCommand cmd{};
+    cmd.type = AudioCommandType::TTS;
+    if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
     LOG_SYS("AUDIO TTS selftest queued for TaskAudio playback");
 }
 #endif // TTS_SIM_SELFTEST
@@ -182,25 +207,47 @@ void setup() {
     // NOTE: deliberately does NOT touch g_lastCmdTime — audio is independent of the
     // servo safety watchdog (I-4), so a speaker request must never keep motion alive.
     mqttManager.setAudioCommandCallback([](const String& action, JsonDocument& doc) {
+        // Everything below is NON-BLOCKING: it just enqueues an AudioCommand
+        // for TaskAudio to consume. TaskNetwork must NOT touch i2s_write or
+        // ttsStreamer directly — that was the source of the
+        // 'first try works, second silent' bug (use-after-free + DMA race).
+        auto enqueue = [](const AudioCommand& cmd) -> bool {
+            if (!g_audioQueue) return false;
+            // pdMS_TO_TICKS(0): non-blocking. If the queue is saturated, log
+            // + drop — better than blocking the MQTT callback on i2s_write.
+            if (xQueueSend(g_audioQueue, &cmd, 0) != pdTRUE) {
+                LOG_ERR("AUDIO queue full (depth 4); dropping cmd type=%u", (unsigned)cmd.type);
+                return false;
+            }
+            return true;
+        };
+        AudioCommand cmd{};
         if (action == "beep") {
+            cmd.type = AudioCommandType::TONE;
+            cmd.freqHz = 1200;
+            cmd.ms = 120;
             mqttManager.sendAudioStatus("playing", "beep");
-            audioManager.playTone(1200, 120);
-            mqttManager.sendAudioStatus("idle", "beep");
+            enqueue(cmd);
         } else if (action == "alarm") {
             const char* name = doc["payload"] | "";
             if (strlen(name) > 0) {
+                cmd.type = AudioCommandType::ALARM;
+                strncpy(cmd.alarmName, name, sizeof(cmd.alarmName) - 1);
+                cmd.alarmName[sizeof(cmd.alarmName) - 1] = '\0';
                 mqttManager.sendAudioStatus("playing", "alarm");
-                audioManager.playAlarm(name);
-                mqttManager.sendAudioStatus("idle", "alarm");
+                enqueue(cmd);
             }
         } else if (action == "play") {
+            cmd.type = AudioCommandType::TONE;
+            cmd.freqHz = 660;
+            cmd.ms = 120;
             mqttManager.sendAudioStatus("playing", "play");
-            audioManager.playTone(660, 120);
-            mqttManager.sendAudioStatus("idle", "play");
+            enqueue(cmd);
         } else if (action == "tts") {
             // P5 chunked TTS: RPi Piper WAV split into base64 frames
-            // {flow_id, seq, total, payload}. Assemble in PSRAM (never in the
-            // command/watchdog path) and kick TaskAudio for I2S streaming.
+            // {flow_id, seq, total, payload}. Assemble in PSRAM (called from
+            // the MQTT callback is OK — no I/O, just PSRAM; the buffer is
+            // only handed off to TaskAudio once FLOW_COMPLETE fires).
             String  flowId  = doc["flow_id"] | "";
             uint16_t seq    = doc["seq"]    | 0;
             uint16_t total  = doc["total"]  | 0;
@@ -208,9 +255,9 @@ void setup() {
 
             TTSStreamer::FeedResult res = ttsStreamer.feed(flowId, seq, total, payload);
             if (res == TTSStreamer::FeedResult::FLOW_COMPLETE) {
+                cmd.type = AudioCommandType::TTS;
                 mqttManager.sendAudioStatus("playing", "tts");
-                uint32_t token = 1;
-                if (g_audioQueue) xQueueSend(g_audioQueue, &token, 0);
+                enqueue(cmd);
             } else if (res == TTSStreamer::FeedResult::ERROR) {
                 LOG_ERR("AUDIO TTS error (flow=%s seq=%u/%u len=%u)", flowId.c_str(), seq, total, payload.length());
                 ttsStreamer.resetFlow();
@@ -221,7 +268,7 @@ void setup() {
         }
     });
 
-    g_audioQueue = xQueueCreate(2, sizeof(uint32_t));
+    g_audioQueue = xQueueCreate(4, sizeof(AudioCommand));
     ttsStreamer.begin();
 
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask", 8192, NULL, 1, NULL, 0);
@@ -270,12 +317,12 @@ void TaskNetwork(void *pvParameters) {
 
             mqttManager.sendTelemetry(telemetry);
 
-            // TaskAudio finished a TTS flow -> publish 'idle' here (core 0),
-            // so all MQTT writes stay on the network task (PubSubClient is not
-            // concurrent-safe across tasks).
+            // TaskAudio finished a playback (TTS flow, beep, or alarm) ->
+            // publish 'idle' here (core 0), so all MQTT writes stay on the
+            // network task (PubSubClient is not concurrent-safe across tasks).
             if (g_audioDonePending) {
                 g_audioDonePending = false;
-                mqttManager.sendAudioStatus("idle", "tts");
+                mqttManager.sendAudioStatus("idle", g_audioIdleAction[0] ? g_audioIdleAction : "tts");
             }
         }
 
@@ -312,23 +359,43 @@ void TaskControl(void *pvParameters) {
     }
 }
 
-// Dedicated I2S playback task (P5 TTS): consumes complete flows from
-// TTSStreamer and streams PCM to the MAX98357. Intentional backpressure —
-// i2s_write blocks here while TaskNetwork (core 0) keeps MQTT alive.
+// Dedicated I2S playback task: the ONLY thread that calls audioManager and
+// ttsStreamer. Consumes AudioCommand tokens pushed by TaskNetwork's MQTT
+// callback (non-blocking) or the Wokwi selftest. i2s_write blocks here while
+// TaskNetwork (core 0) keeps MQTT alive — never the other way around.
 void TaskAudio(void *pvParameters) {
-    uint32_t token;
+    AudioCommand cmd;
     for (;;) {
-        if (xQueueReceive(g_audioQueue, &token, portMAX_DELAY) != pdTRUE) continue;
-        if (!ttsStreamer.hasCompleteFlow()) continue;
+        if (xQueueReceive(g_audioQueue, &cmd, portMAX_DELAY) != pdTRUE) continue;
 
-        const TTSStreamer::Flow& flow = ttsStreamer.flow();
-        LOG_SYS("AUDIO TTS playing %u samples (%luHz/%u ch)",
-                (unsigned)flow.pcmSampleCount(), (unsigned long)flow.sampleRate, flow.channels);
-        audioManager.playPcm(flow.pcm(), flow.pcmSampleCount());
-        ttsStreamer.releaseFlow();
-
-        // Defer the MQTT 'idle' publish to TaskNetwork (single-writer rule).
-        g_audioDonePending = true;
-        LOG_SYS("AUDIO TTS playback complete");
+        switch (cmd.type) {
+            case AudioCommandType::TONE:
+                audioManager.playTone(cmd.freqHz, cmd.ms);
+                strncpy(g_audioIdleAction, "tone", sizeof(g_audioIdleAction) - 1);
+                g_audioIdleAction[sizeof(g_audioIdleAction) - 1] = '\0';
+                g_audioDonePending = true;
+                break;
+            case AudioCommandType::ALARM:
+                audioManager.playAlarm(cmd.alarmName[0] ? cmd.alarmName : "idle");
+                strncpy(g_audioIdleAction, "alarm", sizeof(g_audioIdleAction) - 1);
+                g_audioIdleAction[sizeof(g_audioIdleAction) - 1] = '\0';
+                g_audioDonePending = true;
+                break;
+            case AudioCommandType::TTS:
+            default:
+                if (!ttsStreamer.hasCompleteFlow()) break;
+                {
+                    const TTSStreamer::Flow& flow = ttsStreamer.flow();
+                    LOG_SYS("AUDIO TTS playing %u samples (%luHz/%u ch)",
+                            (unsigned)flow.pcmSampleCount(), (unsigned long)flow.sampleRate, flow.channels);
+                    audioManager.playPcm(flow.pcm(), flow.pcmSampleCount());
+                    ttsStreamer.releaseFlow();
+                }
+                strncpy(g_audioIdleAction, "tts", sizeof(g_audioIdleAction) - 1);
+                g_audioIdleAction[sizeof(g_audioIdleAction) - 1] = '\0';
+                g_audioDonePending = true;
+                LOG_SYS("AUDIO TTS playback complete");
+                break;
+        }
     }
 }
