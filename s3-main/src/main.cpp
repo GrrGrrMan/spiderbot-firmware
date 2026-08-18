@@ -315,7 +315,22 @@ void TaskNetwork(void *pvParameters) {
             telemetry["hotspot"]   = netManager.isHotspot();
             telemetry["power"]     = servoManager.isOutputsEnabled();
 
-            mqttManager.sendTelemetry(telemetry);
+            // --- PHASE 3: GHOST SILHOUETTE FEEDBACK ---
+            // Map the firmware's 100Hz kinematics IK output back into the 
+            // Web-UI's expected pose struct.
+            JsonObject poseObj = telemetry["pose"].to<JsonObject>();
+            const char* legNames[6] = {
+                "rightFront", "rightMiddle", "rightBack", 
+                "leftBack", "leftMiddle", "leftFront"
+            };
+            for (uint8_t i = 0; i < 6; i++) {
+                float alpha, beta, gamma;
+                motionController.getRawLegAngles(i, alpha, beta, gamma);
+                JsonObject legObj = poseObj[legNames[i]].to<JsonObject>();
+                legObj["alpha"] = alpha;
+                legObj["beta"] = beta;
+                legObj["gamma"] = gamma;
+            }
 
             // TaskAudio finished a playback (TTS flow, beep, or alarm) ->
             // publish 'idle' here (core 0), so all MQTT writes stay on the

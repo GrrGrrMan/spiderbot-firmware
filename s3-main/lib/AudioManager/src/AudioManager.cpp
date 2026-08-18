@@ -1,11 +1,14 @@
 #include "AudioManager.h"
 #include "logger.h"
-
 #include <math.h>
+#include <string.h>
+
+#define DMA_CHUNK_SAMPLES 256
 
 AudioManager::AudioManager()
     : m_state(AudioState::IDLE),
       m_volume(1.0f),
+      m_volQ15(32767),
       m_port(AUDIO_I2S_NUM),
       m_initialized(false) {}
 
@@ -13,9 +16,10 @@ bool AudioManager::begin() {
 #if AUDIO_SIM_MODE
     m_initialized = true;
     m_state = AudioState::IDLE;
-    LOG_SYS("AUDIO I2S ready (sim) - Wokwi has no I2S/DMA; PCM pipeline verified, hardware skipped");
+    LOG_SYS("AUDIO I2S ready (sim) - Wokwi mode");
     return true;
 #endif
+
     i2s_config_t cfg = {};
     cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate          = AUDIO_SAMPLE_RATE;
@@ -26,7 +30,7 @@ bool AudioManager::begin() {
     cfg.dma_buf_count        = 8;
     cfg.dma_buf_len          = 128;
     cfg.use_apll             = true;
-    cfg.tx_desc_auto_clear   = true;
+    cfg.tx_desc_auto_clear   = true;  // Hardware writes zeros on underrun (prevents pops)
 
     esp_err_t err = i2s_driver_install(m_port, &cfg, 0, NULL);
     if (err != ESP_OK) {
@@ -52,6 +56,8 @@ bool AudioManager::begin() {
 
     m_initialized = true;
     m_state = AudioState::IDLE;
+    setVolume(m_volume);
+
     LOG_SYS("AUDIO I2S ready (BCLK=%d LRC=%d DIN=%d @%uHz)",
             PIN_AUDIO_BCLK, PIN_AUDIO_LRC, PIN_AUDIO_DIN, AUDIO_SAMPLE_RATE);
     return true;
@@ -59,42 +65,54 @@ bool AudioManager::begin() {
 
 void AudioManager::setVolume(float v) {
     m_volume = v > 1.0f ? 1.0f : (v < 0.0f ? 0.0f : v);
+    m_volQ15 = (int32_t)(m_volume * 32767.0f);
 }
 
 float AudioManager::getVolume() const { return m_volume; }
 
+int AudioManager::state() const { return m_state; }
+
 void AudioManager::stop() {
 #if !AUDIO_SIM_MODE
-    if (m_initialized) i2s_stop(m_port);
+    if (m_initialized) {
+        i2s_zero_dma_buffer(m_port); // Flush DMA without killing clock to avoid speaker thump
+    }
 #endif
     m_state = AudioState::IDLE;
 }
 
-int AudioManager::state() const { return m_state; }
+void AudioManager::applyGain(int16_t* dst, const int16_t* src, size_t count) {
+    if (m_volQ15 >= 32767) {
+        memcpy(dst, src, count * sizeof(int16_t));
+        return;
+    }
+    if (m_volQ15 <= 0) {
+        memset(dst, 0, count * sizeof(int16_t));
+        return;
+    }
+    for (size_t i = 0; i < count; i++) {
+        dst[i] = (int16_t)(((int32_t)src[i] * m_volQ15) >> 15);
+    }
+}
 
-size_t AudioManager::writePcm(const int16_t* samples, size_t count) {
-    if (!m_initialized || count == 0) return 0;
-    if (m_state != AudioState::PLAYING) m_state = AudioState::PLAYING;
+size_t AudioManager::writePcmChunk(const int16_t* samples, size_t count) {
+    if (!m_initialized || !samples || count == 0) return 0;
+    m_state = AudioState::PLAYING;
 
 #if AUDIO_SIM_MODE
-    // Sim mode (Wokwi): no I2S hardware to service — report the bytes a real write would
-    // emit, keeping the PCM/state/log pipeline identical to the physical build.
-    (void)samples;
     return count * sizeof(int16_t);
 #endif
-    // Software gain into a small stack buffer, streamed over I2S DMA in bounded chunks.
-    static int16_t scaled[256];
+
+    int16_t scaled[DMA_CHUNK_SAMPLES]; // Local stack buffer (thread-safe, replaces static)
     size_t writtenTotal = 0;
     size_t idx = 0;
+
     while (idx < count) {
-        size_t chunk = (count - idx) > 256 ? 256 : (count - idx);
-        for (size_t i = 0; i < chunk; i++) {
-            float s = (float)samples[idx + i] * m_volume;
-            scaled[i] = (int16_t)(s >  32767.0f ?  32767 : (s < -32768.0f ? -32768 : s));
-        }
+        size_t chunk = (count - idx) > DMA_CHUNK_SAMPLES ? DMA_CHUNK_SAMPLES : (count - idx);
+        applyGain(scaled, &samples[idx], chunk);
+
         size_t bytesWritten = 0;
-        esp_err_t err = i2s_write(m_port, (const char*)scaled, chunk * sizeof(int16_t),
-                                  &bytesWritten, pdMS_TO_TICKS(100));
+        esp_err_t err = i2s_write(m_port, scaled, chunk * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(100));
         if (err != ESP_OK) {
             m_state = AudioState::ERROR;
             break;
@@ -105,26 +123,48 @@ size_t AudioManager::writePcm(const int16_t* samples, size_t count) {
     return writtenTotal;
 }
 
+bool AudioManager::playPcm(const int16_t* samples, size_t count) {
+    if (!m_initialized || !samples || count == 0) return false;
+    writePcmChunk(samples, count);
+    m_state = AudioState::IDLE;
+    return true;
+}
+
+// Generates sine beeps with smooth 5ms fade-in / fade-out to prevent speaker pop
 bool AudioManager::playTone(uint16_t freqHz, uint16_t ms) {
     if (!m_initialized) return false;
 
-    size_t count = (size_t)((uint32_t)AUDIO_SAMPLE_RATE * ms / 1000);
-    if (count == 0) count = 1;
+    size_t totalSamples = (size_t)((uint32_t)AUDIO_SAMPLE_RATE * ms / 1000);
+    if (totalSamples == 0) return true;
+
+    size_t rampSamples = (AUDIO_SAMPLE_RATE * 5) / 1000; // 5ms ramp
+    if (rampSamples > totalSamples / 2) rampSamples = totalSamples / 2;
 
     const float step = 2.0f * (float)M_PI * (float)freqHz / (float)AUDIO_SAMPLE_RATE;
-    int16_t frame[256];
-    size_t idx = 0;
-    while (idx < count) {
-        size_t n = ((count - idx) > 256) ? 256 : (count - idx);
+    int16_t frame[DMA_CHUNK_SAMPLES];
+
+    size_t generated = 0;
+    while (generated < totalSamples) {
+        size_t n = (totalSamples - generated) > DMA_CHUNK_SAMPLES ? DMA_CHUNK_SAMPLES : (totalSamples - generated);
+
         for (size_t k = 0; k < n; k++) {
-            frame[k] = (int16_t)(sinf((float)(idx + k) * step) * 20000.0f);
+            size_t currentSample = generated + k;
+            float sample = sinf((float)currentSample * step) * 20000.0f;
+
+            if (currentSample < rampSamples) {
+                sample *= ((float)currentSample / (float)rampSamples);
+            } else if (currentSample > (totalSamples - rampSamples)) {
+                sample *= ((float)(totalSamples - currentSample) / (float)rampSamples);
+            }
+            frame[k] = (int16_t)sample;
         }
-        writePcm(frame, n);
-        idx += n;
+
+        writePcmChunk(frame, n);
+        generated += n;
     }
 
     m_state = AudioState::IDLE;
-    LOG_SYS("AUDIO beep (%uHz,%ums) wrote ~%u bytes", freqHz, ms, (unsigned)(count * 2));
+    LOG_SYS("AUDIO beep (%uHz,%ums) wrote ~%u bytes", freqHz, ms, (unsigned)(totalSamples * 2));
     return true;
 }
 
@@ -138,18 +178,10 @@ bool AudioManager::playAlarm(const char* name) {
     } else if (strcmp(name, "idle") == 0) {
         playTone(440, 160);
     } else {
-        playTone(520, 200); // generic fallback
+        playTone(520, 200);
     }
 
     m_state = AudioState::IDLE;
     LOG_SYS("AUDIO alarm '%s' played", name);
-    return true;
-}
-
-bool AudioManager::playPcm(const int16_t* samples, size_t count) {
-    if (!m_initialized || !samples || count == 0) return false;
-    writePcm(samples, count);
-    m_state = AudioState::IDLE;
-    LOG_SYS("AUDIO played %u PCM samples", (unsigned)count);
     return true;
 }

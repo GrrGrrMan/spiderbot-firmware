@@ -8,7 +8,9 @@
 #define MAX_POSE_ANGULAR_DEG_PER_SEC  90.0f // Max slew rate for roll/pitch/yaw/hipStance
 
 MotionController::MotionController(ServoManager& servoMgr) 
-    : m_servoMgr(servoMgr) {
+    : m_servoMgr(servoMgr),
+      m_mutex(nullptr) {
+    m_mutex = xSemaphoreCreateMutex();
     m_targetPose = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     m_velocityCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f}; // Default: 25mm lift, 1.0s stride cycle
     m_currentPose = m_targetPose;
@@ -16,30 +18,82 @@ MotionController::MotionController(ServoManager& servoMgr)
     for (int i = 0; i < LEG_COUNT; i++) {
         m_rawTargetAngles[i]  = {0.0f, 0.0f, 0.0f};
         m_rawCurrentAngles[i] = {0.0f, 0.0f, 0.0f};
+        m_appliedAngles[i]    = {0.0f, 0.0f, 0.0f};
     }
     m_isRawMode = false; 
 }
 
-void MotionController::setRawServoMode(bool enable) {
-    m_isRawMode = enable;
+MotionController::~MotionController() {
+    if (m_mutex) {
+        vSemaphoreDelete(m_mutex);
+        m_mutex = nullptr;
+    }
 }
 
 void MotionController::begin() {
+    if (!m_mutex) {
+        m_mutex = xSemaphoreCreateMutex();
+    }
     for (int i = 0; i < LEG_COUNT; i++) {
         m_footTargets[i] = { DEFAULT_FOOT_X, DEFAULT_FOOT_Y, DEFAULT_FOOT_Z };
     }
 }
 
+void MotionController::setRawServoMode(bool enable) {
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_isRawMode = enable;
+        xSemaphoreGive(m_mutex);
+    } else {
+        m_isRawMode = enable;
+    }
+}
+
 void MotionController::setBodyPose(const BodyPose& pose) {
-    m_targetPose = pose;
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_targetPose = pose;
+        xSemaphoreGive(m_mutex);
+    }
 }
 
 void MotionController::setVelocity(const VelocityCommand& cmd) {
-    m_velocityCmd = cmd;
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_velocityCmd = cmd;
+        xSemaphoreGive(m_mutex);
+    }
 }
 
 void MotionController::setGaitType(GaitType type) {
-    m_gaitGen.setGaitType(type);
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_gaitGen.setGaitType(type);
+        xSemaphoreGive(m_mutex);
+    }
+}
+
+void MotionController::setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma) {
+    if (leg >= LEG_COUNT) return;
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // Web UI gamma (tibia) aligns negatively with the kinematics math model
+        m_rawTargetAngles[leg] = { alpha, beta, -gamma };
+        xSemaphoreGive(m_mutex);
+    }
+}
+
+void MotionController::getRawLegAngles(uint8_t leg, float& alpha, float& beta, float& gamma) {
+    if (leg >= LEG_COUNT) {
+        alpha = beta = gamma = 0.0f;
+        return;
+    }
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        alpha = m_appliedAngles[leg].alpha;
+        beta  = m_appliedAngles[leg].beta;
+        gamma = m_appliedAngles[leg].gamma;
+        xSemaphoreGive(m_mutex);
+    } else {
+        // Fallback if lock timed out
+        alpha = m_appliedAngles[leg].alpha;
+        beta  = m_appliedAngles[leg].beta;
+        gamma = m_appliedAngles[leg].gamma;
+    }
 }
 
 uint16_t MotionController::degreesToTick(float angleDeg, bool invert, float neutralOffset) {
@@ -59,17 +113,25 @@ static inline float slewToward(float current, float target, float maxDelta) {
 }
 
 void MotionController::update(float dtSeconds) {
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+        // Yield if lock unavailable to prevent stalling Core 1 TaskControl cadence
+        return;
+    }
+
     float maxLinDelta = MAX_POSE_LINEAR_MM_PER_SEC * dtSeconds;
     float maxAngDelta = MAX_POSE_ANGULAR_DEG_PER_SEC * dtSeconds;
     float maxJointDelta = MAX_JOINT_DEG_PER_SEC * dtSeconds;
 
     if (m_isRawMode) {
-        // Slew each leg's raw angles toward their MQTT-commanded targets,
-        // decoupled from however fast pose messages actually arrive.
         for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
             m_rawCurrentAngles[leg].alpha = slewToward(m_rawCurrentAngles[leg].alpha, m_rawTargetAngles[leg].alpha, maxJointDelta);
             m_rawCurrentAngles[leg].beta  = slewToward(m_rawCurrentAngles[leg].beta,  m_rawTargetAngles[leg].beta,  maxJointDelta);
             m_rawCurrentAngles[leg].gamma = slewToward(m_rawCurrentAngles[leg].gamma, m_rawTargetAngles[leg].gamma, maxJointDelta);
+
+            // Record active applied state (negate gamma back to UI frame)
+            m_appliedAngles[leg].alpha = m_rawCurrentAngles[leg].alpha;
+            m_appliedAngles[leg].beta  = m_rawCurrentAngles[leg].beta;
+            m_appliedAngles[leg].gamma = -m_rawCurrentAngles[leg].gamma;
 
             bool invertLeg = (leg >= 3);
             uint16_t coxaWidthTicks  = degreesToTick(m_rawCurrentAngles[leg].alpha, invertLeg, COXA_NEUTRAL_DEG);
@@ -80,6 +142,7 @@ void MotionController::update(float dtSeconds) {
             m_servoMgr.setServoWidthTicks(LEG_FEMUR_CHANNELS[leg], femurWidthTicks);
             m_servoMgr.setServoWidthTicks(LEG_TIBIA_CHANNELS[leg], tibiaWidthTicks);
         }
+        xSemaphoreGive(m_mutex);
         return;
     }
 
@@ -97,7 +160,7 @@ void MotionController::update(float dtSeconds) {
     m_currentVelocity.stepHeight = slewToward(m_currentVelocity.stepHeight, m_velocityCmd.stepHeight, maxLinDelta);
     m_currentVelocity.legStance  = slewToward(m_currentVelocity.legStance,  m_velocityCmd.legStance,  maxLinDelta);
     m_currentVelocity.hipStance  = slewToward(m_currentVelocity.hipStance,  m_velocityCmd.hipStance,  maxAngDelta);
-    m_currentVelocity.cycleTime  = m_velocityCmd.cycleTime; // timing constant, safe to apply immediately
+    m_currentVelocity.cycleTime  = m_velocityCmd.cycleTime;
 
     // 1. Advance Gait Generator foot trajectories if velocity vector is active
     if (fabsf(m_currentVelocity.vx) > 0.1f || fabsf(m_currentVelocity.vy) > 0.1f || fabsf(m_currentVelocity.omega) > 0.1f) {
@@ -121,6 +184,11 @@ void MotionController::update(float dtSeconds) {
             continue;
         }
 
+        // Record active applied state (negate tibiaDeg back to UI gamma)
+        m_appliedAngles[leg].alpha = joints.leg[leg].coxaDeg;
+        m_appliedAngles[leg].beta  = joints.leg[leg].femurDeg;
+        m_appliedAngles[leg].gamma = -joints.leg[leg].tibiaDeg;
+
         uint8_t coxaCh  = LEG_COXA_CHANNELS[leg];
         uint8_t femurCh = LEG_FEMUR_CHANNELS[leg];
         uint8_t tibiaCh = LEG_TIBIA_CHANNELS[leg];
@@ -134,10 +202,6 @@ void MotionController::update(float dtSeconds) {
         m_servoMgr.setServoWidthTicks(femurCh, femurWidthTicks);
         m_servoMgr.setServoWidthTicks(tibiaCh, tibiaWidthTicks);
     }
-}
 
-void MotionController::setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma) {
-    // Note: The Web UI gamma (tibia) aligns negatively to the math model.
-    // Only stores the target now — update() slews toward it and writes servos.
-    m_rawTargetAngles[leg] = { alpha, beta, -gamma };
+    xSemaphoreGive(m_mutex);
 }
