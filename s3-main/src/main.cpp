@@ -207,14 +207,11 @@ void setup() {
     // NOTE: deliberately does NOT touch g_lastCmdTime — audio is independent of the
     // servo safety watchdog (I-4), so a speaker request must never keep motion alive.
     mqttManager.setAudioCommandCallback([](const String& action, JsonDocument& doc) {
-        // Everything below is NON-BLOCKING: it just enqueues an AudioCommand
-        // for TaskAudio to consume. TaskNetwork must NOT touch i2s_write or
-        // ttsStreamer directly — that was the source of the
-        // 'first try works, second silent' bug (use-after-free + DMA race).
+        // Feed watchdog during active audio streaming so servo outputs aren't killed mid-speech
+        g_lastCmdTime = millis();
+
         auto enqueue = [](const AudioCommand& cmd) -> bool {
             if (!g_audioQueue) return false;
-            // pdMS_TO_TICKS(0): non-blocking. If the queue is saturated, log
-            // + drop — better than blocking the MQTT callback on i2s_write.
             if (xQueueSend(g_audioQueue, &cmd, 0) != pdTRUE) {
                 LOG_ERR("AUDIO queue full (depth 4); dropping cmd type=%u", (unsigned)cmd.type);
                 return false;
@@ -348,7 +345,7 @@ void TaskNetwork(void *pvParameters) {
 void TaskControl(void *pvParameters) {
     servoManager.begin();
     LOG_SYS("S3 Servo Manager ready");
-    runBootServoCycle();
+
     runBootAudioTest();
 #if TTS_SIM_SELFTEST
     runBootTtsSelftest();
@@ -360,8 +357,13 @@ void TaskControl(void *pvParameters) {
 
     for (;;) {
         // --- SAFETY WATCHDOG ---
-        // If we haven't received an MQTT command in 2.0 seconds, halt everything.
-        if (g_lastCmdTime > 0 && (millis() - g_lastCmdTime > 2000)) {
+        // Only trigger watchdog timeout if audio is NOT currently playing
+        bool isAudioBusy = (audioManager.state() == AudioState::PLAYING);
+        if (isAudioBusy) {
+            g_lastCmdTime = millis(); // Hold watchdog while robot is speaking
+        }
+
+        if (g_lastCmdTime > 0 && (millis() - g_lastCmdTime > 3000)) {
             VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
             motionController.setVelocity(stopCmd);     // Stop walking
             servoManager.setOutputsEnabled(false);     // Cut PWM signals (go limp)

@@ -38,76 +38,79 @@ void registerAllCommandHandlers(
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
 
-    // 3. Motion Engine Handler (Velocity Vectors & 6-DOF Body Poses)
-    dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl](const JsonDocument& doc) {
-        motionCtrl.setRawServoMode(false); // RESUME the IK Engine
-        // Check for Gait Mode Switch ("tripod", "ripple", "wave")
+// 3. Motion Engine Handler (Velocity Vectors, Stances & 6-DOF Body Poses)
+    dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        servoMgr.setOutputsEnabled(true);
+        motionCtrl.setRawServoMode(false); // Ensure IK Engine is ACTIVE
+
+        // Helper lambda to fetch float under multiple possible key names
+        auto getF = [](const JsonDocument& d, const char* k1, const char* k2 = nullptr, const char* k3 = nullptr, float defVal = 0.0f) -> float {
+            if (k1 && !d[k1].isNull()) return d[k1].as<float>();
+            if (k2 && !d[k2].isNull()) return d[k2].as<float>();
+            if (k3 && !d[k3].isNull()) return d[k3].as<float>();
+            return defVal;
+        };
+
+        // Check for Gait Mode Switch
         if (doc["gait"].is<const char*>()) {
             String gaitStr = doc["gait"].as<String>();
             gaitStr.toLowerCase();
             if (gaitStr == "ripple") {
                 motionCtrl.setGaitType(GaitType::RIPPLE);
-                LOG_MOT("Gait switched to: RIPPLE");
             } else if (gaitStr == "wave") {
                 motionCtrl.setGaitType(GaitType::WAVE);
-                LOG_MOT("Gait switched to: WAVE");
             } else {
                 motionCtrl.setGaitType(GaitType::TRIPOD);
-                LOG_MOT("Gait switched to: TRIPOD");
             }
         }
 
-        // Process Velocity Vector Command
-        if (!doc["vx"].isNull() || !doc["vy"].isNull() || !doc["omega"].isNull() || !doc["leg_stance"].isNull()) {
-            VelocityCommand vCmd;
-            vCmd.vx         = doc["vx"]          | 0.0f;
-            vCmd.vy         = doc["vy"]          | 0.0f;
-            vCmd.omega      = doc["omega"]       | 0.0f;
-            vCmd.stepHeight = doc["step_height"] | 25.0f;
-            vCmd.cycleTime  = doc["cycle_time"]  | 1.0f;
-            vCmd.legStance  = doc["leg_stance"]  | 0.0f;
-            vCmd.hipStance  = doc["hip_stance"]  | 0.0f;
-            motionCtrl.setVelocity(vCmd);
-            LOG_MOT("Velocity Cmd: Vx=%.1f, Vy=%.1f, W=%.1f, LegStance=%.1f, HipStance=%.1f", 
-                    vCmd.vx, vCmd.vy, vCmd.omega, vCmd.legStance, vCmd.hipStance);
-        }
+        // Parse Velocity & Stance Parameters
+        VelocityCommand vCmd;
+        vCmd.vx         = getF(doc, "vx", "Vx");
+        vCmd.vy         = getF(doc, "vy", "Vy");
+        vCmd.omega      = getF(doc, "omega", "w", "rz");
+        vCmd.stepHeight = getF(doc, "stepHeight", "step_height", "liftSwing", 25.0f);
+        vCmd.cycleTime  = getF(doc, "cycleTime", "cycle_time", "speed", 1.0f);
+        vCmd.legStance  = getF(doc, "legStance", "leg_stance", "stance", 0.0f);
+        vCmd.hipStance  = getF(doc, "hipStance", "hip_stance", "hipSwing", 0.0f);
+        motionCtrl.setVelocity(vCmd);
 
-        // Process Body Pose Command
-        if (!doc["roll"].isNull() || !doc["pitch"].isNull() || !doc["pos_z"].isNull()) {
-            BodyPose pose;
-            pose.posX  = doc["pos_x"] | 0.0f;
-            pose.posY  = doc["pos_y"] | 0.0f;
-            pose.posZ  = doc["pos_z"] | 0.0f;
-            pose.roll  = doc["roll"]  | 0.0f;
-            pose.pitch = doc["pitch"] | 0.0f;
-            pose.yaw   = doc["yaw"]   | 0.0f;
-            motionCtrl.setBodyPose(pose);
-            LOG_MOT("Pose Cmd: Roll=%.1f, Pitch=%.1f, Yaw=%.1f", pose.roll, pose.pitch, pose.yaw);
-        }
+        // Parse 6-DOF Body Pose Shifts
+        BodyPose pose;
+        pose.posX  = getF(doc, "pos_x", "posX", "tx");
+        pose.posY  = getF(doc, "pos_y", "posY", "ty");
+        pose.posZ  = getF(doc, "pos_z", "posZ", "tz");
+        pose.roll  = getF(doc, "roll",  "rx",   "Roll");
+        pose.pitch = getF(doc, "pitch", "ry",   "Pitch");
+        pose.yaw   = getF(doc, "yaw",   "rz",   "Yaw");
+        motionCtrl.setBodyPose(pose);
+
+        LOG_MOT("Live IK Updated: Stance[Leg=%.1f, Hip=%.1f] Pose[X=%.1f, Y=%.1f, Z=%.1f, R=%.1f, P=%.1f, Y=%.1f]",
+                vCmd.legStance, vCmd.hipStance, pose.posX, pose.posY, pose.posZ, pose.roll, pose.pitch, pose.yaw);
     });
 
-    // 3.5 High-Level Pose Command Handler (Decoupled UI)
-    dispatcher.registerHandler(CMD_TYPE_POSE, [&motionCtrl](const JsonDocument& doc) {
-        motionCtrl.setRawServoMode(true); // Pause IK Engine for manual angle control
-        JsonObjectConst poseObj = doc["pose"].as<JsonObjectConst>();
-        
-        // Maps firmware array indices (0-5) to the Web UI string names
-        const char* legNames[6] = {
-            "rightFront", "rightMiddle", "rightBack", 
-            "leftBack", "leftMiddle", "leftFront"
-        };
-        
-        for (uint8_t i = 0; i < 6; i++) {
-            if (poseObj[legNames[i]].is<JsonObjectConst>()) {
-                float alpha = poseObj[legNames[i]]["alpha"] | 0.0f;
-                float beta  = poseObj[legNames[i]]["beta"]  | 0.0f;
-                float gamma = poseObj[legNames[i]]["gamma"] | 0.0f;
-                motionCtrl.setRawLegAngles(i, alpha, beta, gamma);
+    // 3.5 High-Level Pose Command Handler (Manual Servo Tab Only)
+    dispatcher.registerHandler(CMD_TYPE_POSE, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        if (doc["pose"].is<JsonObjectConst>()) {
+            servoMgr.setOutputsEnabled(true);
+            motionCtrl.setRawServoMode(true);
+            JsonObjectConst poseObj = doc["pose"].as<JsonObjectConst>();
+            
+            const char* legNames[6] = {
+                "rightFront", "rightMiddle", "rightBack", 
+                "leftBack", "leftMiddle", "leftFront"
+            };
+            
+            for (uint8_t i = 0; i < 6; i++) {
+                if (poseObj[legNames[i]].is<JsonObjectConst>()) {
+                    float alpha = poseObj[legNames[i]]["alpha"] | 0.0f;
+                    float beta  = poseObj[legNames[i]]["beta"]  | 0.0f;
+                    float gamma = poseObj[legNames[i]]["gamma"] | 0.0f;
+                    motionCtrl.setRawLegAngles(i, alpha, beta, gamma);
+                }
             }
         }
-        LOG_MOT("Applied direct angle pose from Web UI.");
     });
-    
     // 4. System Logging Handler
     dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr, &servoMgr](const JsonDocument& doc) {
         if (doc["logging"].is<bool>()) {

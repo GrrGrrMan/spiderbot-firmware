@@ -51,23 +51,22 @@ HexapodJoints HexapodKinematics::computeBodyPose(const BodyPose& pose, const Leg
         float totalFootY = m_mountOffsets[i].y + hipFootBodyY;
         float totalFootZ = m_mountOffsets[i].z + footTargets[i].z;
 
-        // Apply 3D Rotation Matrix (Roll, Pitch, Yaw)
-        float rotX = cosY * cosP * totalFootX + 
-                     (cosY * sinP * sinR - sinY * cosR) * totalFootY + 
-                     (cosY * sinP * cosR + sinY * sinR) * totalFootZ;
+        // Inverse rotation matrix (R^T)
+        float rotX = cosY * cosP * (totalFootX - pose.posX) + 
+                    sinY * cosP * (totalFootY - pose.posY) - 
+                    sinP        * (totalFootZ - pose.posZ);
 
-        float rotY = sinY * cosP * totalFootX + 
-                     (sinY * sinP * sinR + cosY * cosR) * totalFootY + 
-                     (sinY * sinP * cosR - cosY * sinR) * totalFootZ;
+        float rotY = (cosY * sinP * sinR - sinY * cosR) * (totalFootX - pose.posX) + 
+                    (sinY * sinP * sinR + cosY * cosR) * (totalFootY - pose.posY) + 
+                    cosP * sinR                       * (totalFootZ - pose.posZ);
 
-        float rotZ = -sinP * totalFootX + 
-                     cosP * sinR * totalFootY + 
-                     cosP * cosR * totalFootZ;
+        float rotZ = (cosY * sinP * cosR + sinY * sinR) * (totalFootX - pose.posX) + 
+                    (sinY * sinP * cosR - cosY * sinR) * (totalFootY - pose.posY) + 
+                    cosP * cosR                       * (totalFootZ - pose.posZ);
 
-        // Apply body position translation shift
-        float bodyShiftX = rotX - pose.posX - m_mountOffsets[i].x;
-        float bodyShiftY = rotY - pose.posY - m_mountOffsets[i].y;
-        float bodyShiftZ = rotZ - pose.posZ - m_mountOffsets[i].z;
+        float bodyShiftX = rotX - m_mountOffsets[i].x;
+        float bodyShiftY = rotY - m_mountOffsets[i].y;
+        float bodyShiftZ = rotZ - m_mountOffsets[i].z;
 
         // Transform back into individual leg's local coordinate frame using inverse mounting angle
         float cosM_inv = cosf(-m_mountAngles[i]);

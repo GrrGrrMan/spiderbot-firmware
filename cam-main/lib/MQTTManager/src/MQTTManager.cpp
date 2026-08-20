@@ -134,7 +134,7 @@ bool MQTTManager::sendTelemetry(const JsonDocument& doc) {
     JsonDocument copyDoc = doc;
     copyDoc["device_id"] = m_deviceId;
 
-    char buffer[512];
+    char buffer[1024];
     size_t bytesWritten = serializeJson(copyDoc, buffer, sizeof(buffer));
     if (bytesWritten == 0) return false;
 

@@ -10,9 +10,14 @@ void GaitGenerator::setGaitType(GaitType type) {
 }
 
 void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosition outputFootTargets[LEG_COUNT]) {
-    if (cmd.cycleTime > 0.05f) {
+    bool isMoving = (fabsf(cmd.vx) > 0.1f || fabsf(cmd.vy) > 0.1f || fabsf(cmd.omega) > 0.1f);
+
+    // 1. Only advance gait phase clock if actively moving
+    if (isMoving && cmd.cycleTime > 0.05f) {
         m_phaseClock += (dtSeconds / cmd.cycleTime);
         if (m_phaseClock >= 1.0f) m_phaseClock -= 1.0f;
+    } else if (!isMoving) {
+        m_phaseClock = 0.0f; // Reset phase clock when stationary
     }
 
     float offsets[LEG_COUNT];
@@ -38,12 +43,15 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
     const float MOUNT_ANGLES[LEG_COUNT] = { MOUNT_ANGLE_RF, MOUNT_ANGLE_RM, MOUNT_ANGLE_RR, MOUNT_ANGLE_LR, MOUNT_ANGLE_LM, MOUNT_ANGLE_LF };
 
     for (int i = 0; i < LEG_COUNT; i++) {
-        float legPhase = m_phaseClock + offsets[i];
-        if (legPhase >= 1.0f) legPhase -= 1.0f;
+        // 1. Calculate true 3D stance foot target from legStance angle (matches Web UI)
+        float legRad = cmd.legStance * (M_PI / 180.0f);
+        
+        // Forward kinematics of beta = legStance, gamma = -legStance
+        float baseFootX = COXA_LENGTH_MM + FEMUR_LENGTH_MM * cosf(legRad);
+        float baseFootY = 0.0f;
+        float baseFootZ = FEMUR_LENGTH_MM * sinf(legRad) - TIBIA_LENGTH_MM;
 
-        float baseFootX = DEFAULT_FOOT_X + cmd.legStance;
-        float baseFootY = DEFAULT_FOOT_Y;
-
+        // 2. Apply hip splay angle (hipStance)
         if (fabsf(cmd.hipStance) > 0.01f) {
             float hipRad = cmd.hipStance * (M_PI / 180.0f);
             float splay = (i == 0 || i == 5) ? hipRad : ((i == 2 || i == 3) ? -hipRad : 0.0f);
@@ -54,7 +62,15 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
             baseFootY = ry;
         }
 
-        // 1. Calculate Stride in the GLOBAL BODY FRAME
+        // If stationary, hold all 6 feet firmly at the calculated 3D stance
+        if (!isMoving) {
+            outputFootTargets[i].x = baseFootX;
+            outputFootTargets[i].y = baseFootY;
+            outputFootTargets[i].z = baseFootZ;
+            continue;
+        }
+
+        // 3. Apply walking strides during motion
         float strideX = cmd.vx * (cmd.cycleTime * stanceRatio);
         float strideY = cmd.vy * (cmd.cycleTime * stanceRatio);
 
@@ -62,18 +78,16 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
             float yawRad = (cmd.omega * (M_PI / 180.0f)) * (cmd.cycleTime * stanceRatio);
             float mRad = MOUNT_ANGLES[i] * (M_PI / 180.0f);
             
-            // Approximate global coordinate of the foot to determine rotational tangency
             float hipX = (i == 0 || i == 5) ? BODY_LENGTH_MM/2.0f : ((i == 2 || i == 3) ? -BODY_LENGTH_MM/2.0f : 0.0f);
-            float hipY = (i < 3) ? -BODY_WIDTH_CENTER/2.0f : BODY_WIDTH_CENTER/2.0f;
+            float halfW = (i == 1 || i == 4) ? (BODY_WIDTH_CENTER / 2.0f) : (BODY_WIDTH_CORNER / 2.0f);
+            float hipY  = (i < 3) ? -halfW : halfW;
             float footWorldX = hipX + cosf(mRad) * baseFootX;
             float footWorldY = hipY + sinf(mRad) * baseFootX;
             
-            // Cross product rotation
             strideX += -footWorldY * yawRad;
             strideY +=  footWorldX * yawRad;
         }
 
-        // 2. Rotate the Global Stride into this leg's LOCAL FRAME
         float mountRad = MOUNT_ANGLES[i] * (M_PI / 180.0f);
         float cosM = cosf(-mountRad);
         float sinM = sinf(-mountRad);
@@ -81,17 +95,19 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
         float localStrideX = strideX * cosM - strideY * sinM;
         float localStrideY = strideX * sinM + strideY * cosM;
 
-        // 3. Apply Local Stride to the Foot Targets
+        float legPhase = m_phaseClock + offsets[i];
+        if (legPhase >= 1.0f) legPhase -= 1.0f;
+
         if (legPhase < swingRatio) {
             float swingProgress = legPhase / swingRatio;
             outputFootTargets[i].x = baseFootX + (-localStrideX + 2.0f * localStrideX * swingProgress);
             outputFootTargets[i].y = baseFootY + (-localStrideY + 2.0f * localStrideY * swingProgress);
-            outputFootTargets[i].z = DEFAULT_FOOT_Z + (sinf(swingProgress * M_PI) * cmd.stepHeight);
+            outputFootTargets[i].z = baseFootZ + (sinf(swingProgress * M_PI) * cmd.stepHeight);
         } else {
             float stanceProgress = (legPhase - swingRatio) / stanceRatio;
             outputFootTargets[i].x = baseFootX + (localStrideX - 2.0f * localStrideX * stanceProgress);
             outputFootTargets[i].y = baseFootY + (localStrideY - 2.0f * localStrideY * stanceProgress);
-            outputFootTargets[i].z = DEFAULT_FOOT_Z;
+            outputFootTargets[i].z = baseFootZ;
         }
     }
 }

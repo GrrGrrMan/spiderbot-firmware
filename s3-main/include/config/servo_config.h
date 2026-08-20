@@ -6,9 +6,9 @@
 #define PIN_PCA_SCL 42
 #define PIN_PCA_OE  13
 
-const uint8_t LEG_COXA_CHANNELS[6]  = { 25, 21, 17,  8,  4,  0 }; // Indices: RF, RM, RB, LB, LM, LF
-const uint8_t LEG_FEMUR_CHANNELS[6] = { 26, 22, 18,  9,  5,  1 };
-const uint8_t LEG_TIBIA_CHANNELS[6] = { 27, 23, 19, 10,  6,  2 };
+const uint8_t LEG_COXA_CHANNELS[6]  = { 24, 20, 16,  8,  4,  0 }; // RF, RM, RB, LB, LM, LF
+const uint8_t LEG_FEMUR_CHANNELS[6] = { 25, 21, 17,  9,  5,  1 };
+const uint8_t LEG_TIBIA_CHANNELS[6] = { 26, 22, 18, 10,  6,  2 };
 
 
 // Dual PCA9685 I2C Addresses
