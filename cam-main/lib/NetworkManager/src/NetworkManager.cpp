@@ -1,6 +1,8 @@
 #include "NetworkManager.h"
 #include "net_config.h"
 #include "logger.h"
+#include <esp_wifi.h>
+
 
 NetworkManager::NetworkManager()
     : m_connected(false),
@@ -15,6 +17,8 @@ void NetworkManager::begin() {
     WiFi.mode(WIFI_STA);
     WiFi.setAutoReconnect(true);
     WiFi.setSleep(false);
+
+    esp_wifi_set_ps(WIFI_PS_NONE);
 
     // Register native ESP32 Wi-Fi hardware event listener
     WiFi.onEvent(NetworkManager::onWiFiEvent);

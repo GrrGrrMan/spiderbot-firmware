@@ -67,9 +67,7 @@ void TaskNetwork(void *pvParameters) {
     mqttManager.begin(DEVICE_ID, 1883);
 
     static bool s_bootValidated = false;
-    static bool s_cameraAttempted = false;
-    static uint8_t s_cameraRetries = 0;
-    const uint8_t MAX_CAM_RETRIES = 3;
+    static unsigned long s_lastCamAttemptMs = 0;
 
     for (;;) {
         netManager.update();
@@ -79,16 +77,13 @@ void TaskNetwork(void *pvParameters) {
         mqttManager.update(netConnected, brokerHost);
 
         if (netConnected) {
-            // Attempt camera init up to MAX_CAM_RETRIES times
-            if (!s_cameraAttempted && s_cameraRetries < MAX_CAM_RETRIES) {
-                if (cameraServer.begin()) {
-                    s_cameraAttempted = true; // Successfully started
-                } else {
-                    s_cameraRetries++;
-                    if (s_cameraRetries >= MAX_CAM_RETRIES) {
-                        s_cameraAttempted = true; // Give up and stop spamming
-                        LOG_ERR("CAM: Max camera init retries reached. Camera disabled.");
-                    }
+            // Continuously retry camera init every 4 seconds until running
+            if (!cameraServer.isRunning()) {
+                unsigned long now = millis();
+                if (now - s_lastCamAttemptMs >= 4000UL) {
+                    s_lastCamAttemptMs = now;
+                    LOG_NET("CAM: Initializing camera driver...");
+                    cameraServer.begin();
                 }
             }
 

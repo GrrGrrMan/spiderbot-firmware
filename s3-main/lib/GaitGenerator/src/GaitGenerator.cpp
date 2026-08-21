@@ -46,10 +46,10 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
         // 1. Calculate true 3D stance foot target from legStance angle (matches Web UI)
         float legRad = cmd.legStance * (M_PI / 180.0f);
         
-        // Forward kinematics of beta = legStance, gamma = -legStance
+        // Forward kinematics: increasing legStance splays legs outward and lowers body Z
         float baseFootX = COXA_LENGTH_MM + FEMUR_LENGTH_MM * cosf(legRad);
         float baseFootY = 0.0f;
-        float baseFootZ = FEMUR_LENGTH_MM * sinf(legRad) - TIBIA_LENGTH_MM;
+        float baseFootZ = -FEMUR_LENGTH_MM * sinf(legRad) - TIBIA_LENGTH_MM;
 
         // 2. Apply hip splay angle (hipStance)
         if (fabsf(cmd.hipStance) > 0.01f) {

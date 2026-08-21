@@ -28,7 +28,7 @@ bool AudioManager::begin() {
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count        = 8;
-    cfg.dma_buf_len          = 128;
+    cfg.dma_buf_len          = 512;
     cfg.use_apll             = true;
     cfg.tx_desc_auto_clear   = true;  // Hardware writes zeros on underrun (prevents pops)
 
@@ -73,11 +73,6 @@ float AudioManager::getVolume() const { return m_volume; }
 int AudioManager::state() const { return m_state; }
 
 void AudioManager::stop() {
-#if !AUDIO_SIM_MODE
-    if (m_initialized) {
-        i2s_zero_dma_buffer(m_port); // Flush DMA without killing clock to avoid speaker thump
-    }
-#endif
     m_state = AudioState::IDLE;
 }
 
