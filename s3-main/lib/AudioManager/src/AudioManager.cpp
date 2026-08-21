@@ -156,6 +156,8 @@ bool AudioManager::playTone(uint16_t freqHz, uint16_t ms) {
 
         writePcmChunk(frame, n);
         generated += n;
+
+        taskYIELD();
     }
 
     m_state = AudioState::IDLE;

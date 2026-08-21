@@ -45,5 +45,7 @@ private:
     RawLegAngles m_rawCurrentAngles[LEG_COUNT]; // Slewed raw angles actually written each tick
     RawLegAngles m_appliedAngles[LEG_COUNT];    // Actual output angles for both IK and Raw modes
 
+    float m_softStartElapsed;                   // Seconds elapsed since startup for smooth glide-in
+
     uint16_t degreesToTick(float angleDeg, bool invert, float neutralOffset);
 };

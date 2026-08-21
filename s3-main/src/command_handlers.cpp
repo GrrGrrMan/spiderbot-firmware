@@ -38,12 +38,11 @@ void registerAllCommandHandlers(
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
 
-// 3. Motion Engine Handler (Velocity Vectors, Stances & 6-DOF Body Poses)
+    // 3. Motion Engine Handler (Velocity Vectors, Stances & 6-DOF Body Poses)
     dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
         servoMgr.setOutputsEnabled(true);
         motionCtrl.setRawServoMode(false); // Ensure IK Engine is ACTIVE
 
-        // Helper lambda to fetch float under multiple possible key names
         auto getF = [](const JsonDocument& d, const char* k1, const char* k2 = nullptr, const char* k3 = nullptr, float defVal = 0.0f) -> float {
             if (k1 && !d[k1].isNull()) return d[k1].as<float>();
             if (k2 && !d[k2].isNull()) return d[k2].as<float>();
@@ -64,11 +63,11 @@ void registerAllCommandHandlers(
             }
         }
 
-        // Parse Velocity & Stance Parameters
+        // Parse Velocity & Stance Parameters (REMOVED "rz" from omega to prevent collision with static yaw!)
         VelocityCommand vCmd;
         vCmd.vx         = getF(doc, "vx", "Vx");
         vCmd.vy         = getF(doc, "vy", "Vy");
-        vCmd.omega      = getF(doc, "omega", "w", "rz");
+        vCmd.omega      = getF(doc, "omega", "w", "turn", 0.0f);
         vCmd.stepHeight = getF(doc, "stepHeight", "step_height", "liftSwing", 25.0f);
         vCmd.cycleTime  = getF(doc, "cycleTime", "cycle_time", "speed", 1.0f);
         vCmd.legStance  = getF(doc, "legStance", "leg_stance", "stance", 0.0f);

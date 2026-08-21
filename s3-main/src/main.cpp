@@ -63,6 +63,8 @@ void TaskControl(void *pvParameters);
 void TaskAudio(void *pvParameters);
 
 void setup() {
+    pinMode(PIN_PCA_OE, OUTPUT);
+    digitalWrite(PIN_PCA_OE, HIGH); // Assert OE high immediately on reset
     Serial.begin(115200);
     delay(1000);
 
@@ -156,7 +158,7 @@ void setup() {
     });
 
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask",     8192, NULL, 1, NULL, 0); // Core 0
-    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 2, NULL, 1); // Core 1
+    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 3, NULL, 1); // Core 1
     xTaskCreatePinnedToCore(TaskAudio,   "AudioTask",   8192, NULL, 2, NULL, 1); // Core 1
 }
 
@@ -219,11 +221,17 @@ void TaskControl(void *pvParameters) {
     LOG_SYS("S3 Servo Manager ready");
 
     if (audioManager.begin()) {
-        audioManager.playTone(440, 120);
-        audioManager.playAlarm("idle");
+        // Non-blocking: dispatch startup alarm asynchronously to TaskAudio
+        AudioCommand cmd{};
+        cmd.type = AudioCommandType::ALARM;
+        strncpy(cmd.alarmName, "idle", sizeof(cmd.alarmName) - 1);
+        if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
     }
 
     motionController.begin();
+    
+    // Enable servo outputs once registers are primed and motion loop is ready
+    servoManager.setOutputsEnabled(true);
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10);
@@ -252,8 +260,7 @@ void TaskAudio(void *pvParameters) {
     bool isStreamingTts = false;
     bool isPrebuffered  = false;
 
-    // 500ms safety cushion prevents stuttering
-    const size_t INITIAL_PREBUFFER = 22050; 
+    const size_t INITIAL_PREBUFFER = 22050; // 500ms safety cushion prevents stuttering
 
     for (;;) {
         TickType_t waitTicks = isStreamingTts ? pdMS_TO_TICKS(2) : portMAX_DELAY;
@@ -279,7 +286,6 @@ void TaskAudio(void *pvParameters) {
                     break;
 
                 case AudioCommandType::TTS_END:
-                    // Drain all remaining audio in PSRAM to I2S
                     if (g_pcmRingBuffer) {
                         size_t itemSize = 0;
                         while (true) {
@@ -290,7 +296,6 @@ void TaskAudio(void *pvParameters) {
                         }
                     }
 
-                    // Wait 200ms for DMA to physically finish playing the last word
                     vTaskDelay(pdMS_TO_TICKS(200));
 
                     audioManager.stop();
@@ -308,7 +313,6 @@ void TaskAudio(void *pvParameters) {
             size_t waitingBytes = 0;
             vRingbufferGetInfo(g_pcmRingBuffer, nullptr, nullptr, nullptr, nullptr, &waitingBytes);
 
-            // 1. Prebuffer gate
             if (!isPrebuffered) {
                 if (waitingBytes >= INITIAL_PREBUFFER) {
                     isPrebuffered = true;
@@ -318,14 +322,12 @@ void TaskAudio(void *pvParameters) {
                 }
             }
 
-            // 2. Continuous 2048-byte drain
             size_t itemSize = 0;
             void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(2), 2048);
             if (item && itemSize > 0) {
                 audioManager.writePcmChunk((const int16_t*)item, itemSize / sizeof(int16_t));
                 vRingbufferReturnItem(g_pcmRingBuffer, item);
             } else if (waitingBytes == 0) {
-                // Smooth recovery pause (re-arms clean buffer instead of machine-gun stuttering)
                 isPrebuffered = false;
                 vTaskDelay(pdMS_TO_TICKS(5));
             }

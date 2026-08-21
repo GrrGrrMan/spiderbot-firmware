@@ -8,21 +8,12 @@
 #include "logger.h"
 #include "command_handlers.h"
 #include "CameraServer.h"
-#include "ServoManager.h"
-#include "MotionController.h"
 
 bool g_logEnabled = true;
 
-NetworkManager netManager;
-MQTTManager mqttManager;
-ServoManager servoManager;
-MotionController motionController(servoManager);
+NetworkManager    netManager;
+MQTTManager       mqttManager;
 CommandDispatcher cmdDispatcher;
-
-#ifdef CAM_ENABLE_SERVO
-volatile unsigned long g_lastCmdTime = 0;
-void TaskControl(void *pvParameters);
-#endif
 
 void TaskNetwork(void *pvParameters);
 
@@ -31,31 +22,20 @@ void setup() {
     delay(1000);
 
     g_logSink.begin(25);
-#ifdef CAM_ENABLE_SERVO
-    LOG_SYS("Booting esp-cam-main with Onboard Kinematics Engine...");
-#else
-    LOG_SYS("Booting esp-cam-main in CAMERA-ONLY mode (eyes only, no motion)...");
-#endif
+    LOG_SYS("Booting esp-cam-main in CAMERA-ONLY mode (eyes only)...");
 
     otaManager.begin();
 
-    // Register command handlers
-    registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController, mqttManager);
+    // Register only System & OTA handlers
+    registerAllCommandHandlers(cmdDispatcher, otaManager, mqttManager);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
-#ifdef CAM_ENABLE_SERVO
-        g_lastCmdTime = millis();
-#endif
         cmdDispatcher.dispatch(type, doc);
     });
 
-    // Core 0: Dedicated to Network, MQTT, and Logging
+    // Core 0: Wi-Fi, MQTT, Telemetry, Logging, OTA
+    // Core 1: CameraServer HTTP MJPEG streaming (:81/stream)
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask", 8192, NULL, 1, NULL, 0);
-
-#ifdef CAM_ENABLE_SERVO
-    // Core 1: 100 Hz kinematic control loop (if servos enabled)
-    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 2, NULL, 1);
-#endif
 }
 
 void loop() {
@@ -77,7 +57,7 @@ void TaskNetwork(void *pvParameters) {
         mqttManager.update(netConnected, brokerHost);
 
         if (netConnected) {
-            // Continuously retry camera init every 4 seconds until running
+            // Continuously retry camera init every 4 seconds until online
             if (!cameraServer.isRunning()) {
                 unsigned long now = millis();
                 if (now - s_lastCamAttemptMs >= 4000UL) {
@@ -100,7 +80,7 @@ void TaskNetwork(void *pvParameters) {
                     mqttManager.sendLog(entry.message);
                 }
 
-                // Publish rich telemetry snapshot with dynamic MJPEG URL
+                // Publish telemetry with MJPEG endpoint
                 JsonDocument telemetry;
                 telemetry["uptime"]     = millis() / 1000;
                 telemetry["free_heap"]  = ESP.getFreeHeap();
@@ -108,9 +88,6 @@ void TaskNetwork(void *pvParameters) {
                 telemetry["ip"]         = netManager.getLocalIP();
                 telemetry["hotspot"]    = netManager.isHotspot();
                 telemetry["stream_url"] = "http://" + netManager.getLocalIP() + ":" + String(CAM_STREAM_PORT) + "/stream";
-#ifdef CAM_ENABLE_SERVO
-                telemetry["power"]      = servoManager.isOutputsEnabled();
-#endif
                 mqttManager.sendTelemetry(telemetry);
             }
         }
@@ -118,27 +95,3 @@ void TaskNetwork(void *pvParameters) {
         vTaskDelay(pdMS_TO_TICKS(100));
     }
 }
-
-#ifdef CAM_ENABLE_SERVO
-void TaskControl(void *pvParameters) {
-    servoManager.begin();
-    motionController.begin();
-
-    TickType_t xLastWakeTime = xTaskGetTickCount();
-    const TickType_t xFrequency = pdMS_TO_TICKS(10); 
-
-    for (;;) {
-        // --- SAFETY WATCHDOG ---
-        if (g_lastCmdTime > 0 && (millis() - g_lastCmdTime > 2000)) {
-            VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
-            motionController.setVelocity(stopCmd);     // Stop walking
-            servoManager.setOutputsEnabled(false);     // Cut PWM signals (go limp)
-            g_lastCmdTime = 0;
-            LOG_ERR("Watchdog Timeout! Connection lost. Halting motion and disabling servos.");
-        }
-
-        motionController.update(0.01f);
-        vTaskDelayUntil(&xLastWakeTime, xFrequency);
-    }
-}
-#endif

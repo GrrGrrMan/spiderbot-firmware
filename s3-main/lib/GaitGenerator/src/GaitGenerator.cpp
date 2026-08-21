@@ -10,14 +10,14 @@ void GaitGenerator::setGaitType(GaitType type) {
 }
 
 void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosition outputFootTargets[LEG_COUNT]) {
-    bool isMoving = (fabsf(cmd.vx) > 0.1f || fabsf(cmd.vy) > 0.1f || fabsf(cmd.omega) > 0.1f);
+    // Only moving if translational or rotational velocity is actively commanded
+    bool isMoving = (fabsf(cmd.vx) > 1.0f || fabsf(cmd.vy) > 1.0f || fabsf(cmd.omega) > 1.0f);
 
-    // 1. Only advance gait phase clock if actively moving
     if (isMoving && cmd.cycleTime > 0.05f) {
         m_phaseClock += (dtSeconds / cmd.cycleTime);
         if (m_phaseClock >= 1.0f) m_phaseClock -= 1.0f;
-    } else if (!isMoving) {
-        m_phaseClock = 0.0f; // Reset phase clock when stationary
+    } else {
+        m_phaseClock = 0.0f; // Instantly lock phase to neutral ground when not walking
     }
 
     float offsets[LEG_COUNT];
@@ -43,15 +43,12 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
     const float MOUNT_ANGLES[LEG_COUNT] = { MOUNT_ANGLE_RF, MOUNT_ANGLE_RM, MOUNT_ANGLE_RR, MOUNT_ANGLE_LR, MOUNT_ANGLE_LM, MOUNT_ANGLE_LF };
 
     for (int i = 0; i < LEG_COUNT; i++) {
-        // 1. Calculate true 3D stance foot target from legStance angle (matches Web UI)
         float legRad = cmd.legStance * (M_PI / 180.0f);
         
-        // Forward kinematics: increasing legStance splays legs outward and lowers body Z
         float baseFootX = COXA_LENGTH_MM + FEMUR_LENGTH_MM * cosf(legRad);
         float baseFootY = 0.0f;
         float baseFootZ = -FEMUR_LENGTH_MM * sinf(legRad) - TIBIA_LENGTH_MM;
 
-        // 2. Apply hip splay angle (hipStance)
         if (fabsf(cmd.hipStance) > 0.01f) {
             float hipRad = cmd.hipStance * (M_PI / 180.0f);
             float splay = (i == 0 || i == 5) ? hipRad : ((i == 2 || i == 3) ? -hipRad : 0.0f);
@@ -62,7 +59,7 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
             baseFootY = ry;
         }
 
-        // If stationary, hold all 6 feet firmly at the calculated 3D stance
+        // When stationary (IK Body Pose mode), hold all feet firmly on the ground
         if (!isMoving) {
             outputFootTargets[i].x = baseFootX;
             outputFootTargets[i].y = baseFootY;
@@ -70,7 +67,7 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
             continue;
         }
 
-        // 3. Apply walking strides during motion
+        // Dynamic walking strides (only computed when actively moving)
         float strideX = cmd.vx * (cmd.cycleTime * stanceRatio);
         float strideY = cmd.vy * (cmd.cycleTime * stanceRatio);
 

@@ -8,50 +8,61 @@ ServoManager::ServoManager() {
     m_boardAddresses[1] = PCA_ADDR_BOARD_2;
     m_boardActive[0] = false;
     m_boardActive[1] = false;
+    m_outputsEnabled = false;
 }
 
 void ServoManager::begin() {
     LOG_SYS("Initializing Dual PCA9685 Servo Drivers...");
 
     pinMode(PIN_PCA_OE, OUTPUT);
-    digitalWrite(PIN_PCA_OE, HIGH); 
-    delay(50);
+    digitalWrite(PIN_PCA_OE, HIGH); // Ensure hardware outputs remain disabled during setup
 
     Wire.begin(PIN_PCA_SDA, PIN_PCA_SCL, 400000); 
     
     for (int i = 0; i < PCA_NUM_BOARDS; i++) {
         m_boardActive[i] = initBoard(i);
     }
-    delayMicroseconds(500); 
+    delay(10); 
 
-    // FIX: Initialize the exact 18 mapped channels instead of just counting 0-17
+    // Pre-buffer initial 1500us pulses into all 18 mapped channels
     for (uint8_t leg = 0; leg < 6; leg++) {
-        uint8_t channels[3] = { LEG_COXA_CHANNELS[leg], LEG_FEMUR_CHANNELS[leg], LEG_TIBIA_CHANNELS[leg] };
-        
-        for (int i = 0; i < 3; i++) {
-            uint8_t ch = channels[i];
-            uint16_t onTick = (ch * STAGGER_OFFSET) % 4096;
-            uint16_t offTick = (onTick + SERVO_HOME_TICK) % 4096;
-            setPWM(ch, onTick, offTick);
-        }
+        setServoWidthTicks(LEG_COXA_CHANNELS[leg],  SERVO_HOME_TICK);
+        setServoWidthTicks(LEG_FEMUR_CHANNELS[leg], SERVO_HOME_TICK);
+        setServoWidthTicks(LEG_TIBIA_CHANNELS[leg], SERVO_HOME_TICK);
     }
-    LOG_MOT("Buffered %d mapped channels with phase-staggered home positions.", NUM_SERVOS);
+    LOG_MOT("Buffered %d mapped channels with non-wrapping phase offsets.", NUM_SERVOS);
 
-    digitalWrite(PIN_PCA_OE, LOW);
-    LOG_SYS("Dual Servo outputs ENABLED.");
+    m_outputsEnabled = false;
 }
 
 bool ServoManager::initBoard(uint8_t boardIndex) {
     uint8_t addr = m_boardAddresses[boardIndex];
     
-    // First write tests if the board exists
+    // 1. Put PCA9685 to sleep to allow prescaler configuration
     if (!writeRegister(addr, PCA_MODE1, 0x11)) {
         LOG_ERR("PCA9685 at 0x%02X NOT FOUND! Check wiring or A0 jumper.", addr);
         return false;
     }
     
+    // 2. Set PWM prescaler for 50Hz (20ms period)
     writeRegister(addr, PCA_PRESCALE, 121);
+
+    // 3. Clear ALL_LED registers to wipe out any residual Full-OFF (Bit 4) flags
+    Wire.beginTransmission(addr);
+    Wire.write(PCA_ALL_LED_ON_L);
+    Wire.write(0x00); // ALL_LED_ON_L
+    Wire.write(0x00); // ALL_LED_ON_H
+    Wire.write(0x00); // ALL_LED_OFF_L
+    Wire.write(0x00); // ALL_LED_OFF_H (Clears Bit 4 Full-OFF!)
+    Wire.endTransmission();
+    
+    // 4. Wake PCA9685 with Auto-Increment (AI) enabled
     writeRegister(addr, PCA_MODE1, 0xA1);
+
+    // 5. Configure MODE2: Totem-pole (push-pull), update registers on STOP command
+    writeRegister(addr, PCA_MODE2, 0x04);
+
+    delayMicroseconds(1000); // Allow internal 25MHz oscillator to stabilize
     LOG_SYS("PCA9685 at 0x%02X initialized and verified.", addr);
     return true;
 }
@@ -60,7 +71,6 @@ void ServoManager::setPWM(uint8_t globalChannel, uint16_t onTick, uint16_t offTi
     uint8_t boardIndex = globalChannel / 16;
     uint8_t localChannel = globalChannel % 16;
 
-    // Abort if board index is out of bounds or hardware was not found
     if (boardIndex >= PCA_NUM_BOARDS || !m_boardActive[boardIndex]) return; 
 
     uint8_t boardAddr = m_boardAddresses[boardIndex];
@@ -68,21 +78,19 @@ void ServoManager::setPWM(uint8_t globalChannel, uint16_t onTick, uint16_t offTi
     Wire.beginTransmission(boardAddr);
     Wire.write(PCA_LED0_ON_L + 4 * localChannel);
     Wire.write(onTick & 0xFF);
-    Wire.write(onTick >> 8);
+    Wire.write((onTick >> 8) & 0x0F);
     Wire.write(offTick & 0xFF);
-    Wire.write(offTick >> 8);
-    Wire.endTransmission(); // Fire and forget for speed during main loop
+    Wire.write((offTick >> 8) & 0x0F);
+    Wire.endTransmission();
 }
 
 bool ServoManager::writeRegister(uint8_t boardAddr, uint8_t reg, uint8_t value) {
     Wire.beginTransmission(boardAddr);
     Wire.write(reg);
     Wire.write(value);
-    uint8_t error = Wire.endTransmission();
-    return (error == 0); // 0 means Success (hardware ACK received)
+    return (Wire.endTransmission() == 0);
 }
 
-// In ServoManager.cpp:
 void ServoManager::setOutputsEnabled(bool enabled) {
     m_outputsEnabled = enabled;
 
@@ -92,29 +100,42 @@ void ServoManager::setOutputsEnabled(bool enabled) {
             if (m_boardActive[i]) {
                 uint8_t addr = m_boardAddresses[i];
                 Wire.beginTransmission(addr);
-                Wire.write(0xFA);
+                Wire.write(PCA_ALL_LED_ON_L);
                 Wire.write(0x00);
                 Wire.write(0x00);
                 Wire.write(0x00);
-                Wire.write(0x10); // ALL_LED_OFF_H (Bit 4 = 1 -> Full OFF)
+                Wire.write(0x10); // Bit 4 = 1 (Full OFF)
                 Wire.endTransmission();
             }
         }
 
-        // 20ms frame wait: lets in-flight PWM pulses complete naturally
-        vTaskDelay(pdMS_TO_TICKS(20));
-
+        vTaskDelay(pdMS_TO_TICKS(20)); // Allow in-flight frame to complete
         digitalWrite(PIN_PCA_OE, HIGH);
         LOG_SYS("Hardware Servo Outputs DISABLED (LIMP)");
     } else {
+        // Clear Full-OFF broadcast before driving OE low
+        for (int i = 0; i < PCA_NUM_BOARDS; i++) {
+            if (m_boardActive[i]) {
+                uint8_t addr = m_boardAddresses[i];
+                Wire.beginTransmission(addr);
+                Wire.write(PCA_ALL_LED_ON_L);
+                Wire.write(0x00);
+                Wire.write(0x00);
+                Wire.write(0x00);
+                Wire.write(0x00);
+                Wire.endTransmission();
+            }
+        }
         digitalWrite(PIN_PCA_OE, LOW);
         LOG_SYS("Hardware Servo Outputs ENABLED");
     }
 }
 
 void ServoManager::setServoWidthTicks(uint8_t globalChannel, uint16_t widthTicks) {
-    uint16_t onTick = (globalChannel * STAGGER_OFFSET) % 4096;
-    uint16_t offTick = (onTick + widthTicks) % 4096;
+    uint8_t localChannel = globalChannel % 16;
+    // Per-board channel staggering prevents simultaneous current spikes without wrapping 4096
+    uint16_t onTick = localChannel * LOCAL_STAGGER_TICKS;
+    uint16_t offTick = onTick + widthTicks;
     setPWM(globalChannel, onTick, offTick);
 }
 
