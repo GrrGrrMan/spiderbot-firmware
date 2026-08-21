@@ -15,6 +15,7 @@ void ServoManager::begin() {
 
     pinMode(PIN_PCA_OE, OUTPUT);
     digitalWrite(PIN_PCA_OE, HIGH); 
+    delay(50);
 
     Wire.begin(PIN_PCA_SDA, PIN_PCA_SCL, 400000); 
     
@@ -81,11 +82,34 @@ bool ServoManager::writeRegister(uint8_t boardAddr, uint8_t reg, uint8_t value) 
     return (error == 0); // 0 means Success (hardware ACK received)
 }
 
+// In ServoManager.cpp:
 void ServoManager::setOutputsEnabled(bool enabled) {
-    // PCA9685 OE pin is active LOW. (LOW = Enabled, HIGH = Disabled/Limp)
     m_outputsEnabled = enabled;
-    digitalWrite(PIN_PCA_OE, enabled ? LOW : HIGH);
-    LOG_SYS("Hardware Servo Outputs %s", enabled ? "ENABLED" : "DISABLED (LIMP)");
+
+    if (!enabled) {
+        // Broadcast Full-OFF to both boards
+        for (int i = 0; i < PCA_NUM_BOARDS; i++) {
+            if (m_boardActive[i]) {
+                uint8_t addr = m_boardAddresses[i];
+                Wire.beginTransmission(addr);
+                Wire.write(0xFA);
+                Wire.write(0x00);
+                Wire.write(0x00);
+                Wire.write(0x00);
+                Wire.write(0x10); // ALL_LED_OFF_H (Bit 4 = 1 -> Full OFF)
+                Wire.endTransmission();
+            }
+        }
+
+        // 20ms frame wait: lets in-flight PWM pulses complete naturally
+        vTaskDelay(pdMS_TO_TICKS(20));
+
+        digitalWrite(PIN_PCA_OE, HIGH);
+        LOG_SYS("Hardware Servo Outputs DISABLED (LIMP)");
+    } else {
+        digitalWrite(PIN_PCA_OE, LOW);
+        LOG_SYS("Hardware Servo Outputs ENABLED");
+    }
 }
 
 void ServoManager::setServoWidthTicks(uint8_t globalChannel, uint16_t widthTicks) {

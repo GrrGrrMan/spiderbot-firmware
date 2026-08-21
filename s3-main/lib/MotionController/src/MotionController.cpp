@@ -7,11 +7,12 @@
 #define MAX_POSE_LINEAR_MM_PER_SEC   150.0f // Max slew rate for posX/posY/posZ/legStance/stepHeight
 #define MAX_POSE_ANGULAR_DEG_PER_SEC  90.0f // Max slew rate for roll/pitch/yaw/hipStance
 
-// ── UNIFORM HARDWARE POLARITY (Applied equally to all 6 legs) ───────────────
-// Set to true or false to match your physical servo horn mounting direction:
-const bool INVERT_ALL_COXA  = false; 
-const bool INVERT_ALL_FEMUR = true;  // true ensures positive angle pushes body down symmetrically
-const bool INVERT_ALL_TIBIA = true;  // true ensures positive angle folds knee inward symmetrically
+// ── PER-LEG HARDWARE POLARITY (Indices: 0:RF, 1:RM, 2:RR, 3:LR, 4:LM, 5:LF) ──
+const bool LEG_COXA_INVERT[LEG_COUNT]  = { true, true, true, true, true, true }; 
+const bool LEG_FEMUR_INVERT[LEG_COUNT] = { true,  true, true,  true,  true,  true  };
+const bool LEG_TIBIA_INVERT[LEG_COUNT] = { true,  true, true,  true,  true,  true  };
+
+
 
 MotionController::MotionController(ServoManager& servoMgr) 
     : m_servoMgr(servoMgr),
@@ -122,10 +123,13 @@ static inline float slewToward(float current, float target, float maxDelta) {
 }
 
 void MotionController::update(float dtSeconds) {
-    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+    if (!m_servoMgr.isOutputsEnabled()) {
         return;
     }
 
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+        return;
+    }
     float maxLinDelta   = MAX_POSE_LINEAR_MM_PER_SEC * dtSeconds;
     float maxAngDelta   = MAX_POSE_ANGULAR_DEG_PER_SEC * dtSeconds;
     float maxJointDelta = MAX_JOINT_DEG_PER_SEC * dtSeconds;
@@ -141,9 +145,9 @@ void MotionController::update(float dtSeconds) {
             m_appliedAngles[leg].gamma = -m_rawCurrentAngles[leg].gamma;
 
             // Uniform PWM calculation across ALL 6 legs
-            uint16_t coxaWidthTicks  = degreesToTick(m_rawCurrentAngles[leg].alpha, INVERT_ALL_COXA,  COXA_NEUTRAL_DEG);
-            uint16_t femurWidthTicks = degreesToTick(m_rawCurrentAngles[leg].beta,  INVERT_ALL_FEMUR, FEMUR_NEUTRAL_DEG);
-            uint16_t tibiaWidthTicks = degreesToTick(m_rawCurrentAngles[leg].gamma, INVERT_ALL_TIBIA, TIBIA_NEUTRAL_DEG);
+            uint16_t coxaWidthTicks  = degreesToTick(m_rawCurrentAngles[leg].alpha, LEG_COXA_INVERT[leg],  COXA_NEUTRAL_DEG);
+            uint16_t femurWidthTicks = degreesToTick(m_rawCurrentAngles[leg].beta,  LEG_FEMUR_INVERT[leg], FEMUR_NEUTRAL_DEG);
+            uint16_t tibiaWidthTicks = degreesToTick(m_rawCurrentAngles[leg].gamma, LEG_TIBIA_INVERT[leg], TIBIA_NEUTRAL_DEG);
 
             m_servoMgr.setServoWidthTicks(LEG_COXA_CHANNELS[leg],  coxaWidthTicks);
             m_servoMgr.setServoWidthTicks(LEG_FEMUR_CHANNELS[leg], femurWidthTicks);
@@ -180,9 +184,9 @@ void MotionController::update(float dtSeconds) {
         m_appliedAngles[leg].gamma = -joints.leg[leg].tibiaDeg;
 
         // Uniform PWM calculation across ALL 6 legs
-        uint16_t coxaWidthTicks  = degreesToTick(joints.leg[leg].coxaDeg, INVERT_ALL_COXA,  COXA_NEUTRAL_DEG);
-        uint16_t femurWidthTicks = degreesToTick(joints.leg[leg].femurDeg, INVERT_ALL_FEMUR, FEMUR_NEUTRAL_DEG);
-        uint16_t tibiaWidthTicks = degreesToTick(joints.leg[leg].tibiaDeg, INVERT_ALL_TIBIA, TIBIA_NEUTRAL_DEG);
+        uint16_t coxaWidthTicks  = degreesToTick(joints.leg[leg].coxaDeg, LEG_COXA_INVERT[leg],  COXA_NEUTRAL_DEG);
+        uint16_t femurWidthTicks = degreesToTick(joints.leg[leg].femurDeg, LEG_FEMUR_INVERT[leg], FEMUR_NEUTRAL_DEG);
+        uint16_t tibiaWidthTicks = degreesToTick(joints.leg[leg].tibiaDeg, LEG_TIBIA_INVERT[leg], TIBIA_NEUTRAL_DEG);
 
         m_servoMgr.setServoWidthTicks(LEG_COXA_CHANNELS[leg],  coxaWidthTicks);
         m_servoMgr.setServoWidthTicks(LEG_FEMUR_CHANNELS[leg], femurWidthTicks);
