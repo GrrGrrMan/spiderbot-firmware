@@ -51,14 +51,18 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
 
         if (fabsf(cmd.hipStance) > 0.01f) {
             float hipRad = cmd.hipStance * (M_PI / 180.0f);
-            float splay = (i == 0 || i == 5) ? hipRad : ((i == 2 || i == 3) ? -hipRad : 0.0f);
+            float splay = 0.0f;
+            if (i == 0)      splay = -hipRad;  // RF
+            else if (i == 5) splay =  hipRad;  // LF
+            else if (i == 2) splay =  hipRad;  // RR
+            else if (i == 3) splay = -hipRad;  // LR
+
             float cosH = cosf(splay), sinH = sinf(splay);
             float rx = baseFootX * cosH - baseFootY * sinH;
             float ry = baseFootX * sinH + baseFootY * cosH;
             baseFootX = rx;
             baseFootY = ry;
         }
-
         // When stationary (IK Body Pose mode), hold all feet firmly on the ground
         if (!isMoving) {
             outputFootTargets[i].x = baseFootX;

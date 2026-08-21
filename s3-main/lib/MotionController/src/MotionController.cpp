@@ -2,14 +2,14 @@
 #include "servo_config.h"
 #include "logger.h"
 
-#define US_PER_DEGREE 11.11f // Angular conversion constant (~1000us span over 90 degrees)
-#define MAX_JOINT_DEG_PER_SEC        180.0f // Normal operating servo speed limit
-#define SOFT_START_JOINT_DEG_PER_SEC  30.0f // Gentle startup glide speed limit
-#define SOFT_START_DURATION_SEC        2.5f // Duration of startup soft-start ramp (seconds)
-#define MAX_POSE_LINEAR_MM_PER_SEC   150.0f // Max slew rate for posX/posY/posZ/legStance/stepHeight
-#define MAX_POSE_ANGULAR_DEG_PER_SEC  90.0f // Max slew rate for roll/pitch/yaw/hipStance
+#define US_PER_DEGREE 11.11f
+#define MAX_JOINT_DEG_PER_SEC        180.0f
+#define SOFT_START_JOINT_DEG_PER_SEC  30.0f
+#define SOFT_START_DURATION_SEC        2.5f
+#define MAX_POSE_LINEAR_MM_PER_SEC   150.0f
+#define MAX_POSE_ANGULAR_DEG_PER_SEC  90.0f
 
-// ── PER-LEG HARDWARE POLARITY (Indices: 0:RF, 1:RM, 2:RR, 3:LR, 4:LM, 5:LF) ──
+// ── TRUE Hardware Polarity matching physical UI mapping ──
 const bool LEG_COXA_INVERT[LEG_COUNT]  = { true, true, true, true, true, true }; 
 const bool LEG_FEMUR_INVERT[LEG_COUNT] = { true, true, true, true, true, true };
 const bool LEG_TIBIA_INVERT[LEG_COUNT] = { true, true, true, true, true, true };
@@ -42,7 +42,7 @@ void MotionController::begin() {
     if (!m_mutex) {
         m_mutex = xSemaphoreCreateMutex();
     }
-    m_softStartElapsed = 0.0f; // Reset startup ramp on boot
+    m_softStartElapsed = 0.0f;
     for (int i = 0; i < LEG_COUNT; i++) {
         m_footTargets[i] = { DEFAULT_FOOT_X, DEFAULT_FOOT_Y, DEFAULT_FOOT_Z };
     }
@@ -81,12 +81,9 @@ void MotionController::setGaitType(GaitType type) {
 void MotionController::setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma) {
     if (leg >= LEG_COUNT) return;
     if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
-        float clampedAlpha = constrain(alpha, COXA_MIN_DEG, COXA_MAX_DEG);
-        float clampedBeta  = constrain(beta,  FEMUR_MIN_DEG, FEMUR_MAX_DEG);
-        float internalGamma = -gamma;
-        float clampedGamma  = constrain(internalGamma, TIBIA_MIN_DEG, TIBIA_MAX_DEG);
-
-        m_rawTargetAngles[leg] = { clampedAlpha, clampedBeta, clampedGamma };
+        m_rawTargetAngles[leg].alpha = constrain(alpha, COXA_MIN_DEG,  COXA_MAX_DEG);
+        m_rawTargetAngles[leg].beta  = constrain(beta,  FEMUR_MIN_DEG, FEMUR_MAX_DEG);
+        m_rawTargetAngles[leg].gamma = constrain(-gamma, TIBIA_MIN_DEG, TIBIA_MAX_DEG);
         xSemaphoreGive(m_mutex);
     }
 }
@@ -133,7 +130,6 @@ void MotionController::update(float dtSeconds) {
         return;
     }
 
-    // ── SOFT-START SPEED RAMP ──────────────────────────────────────────────
     float currentMaxJointSpeed = MAX_JOINT_DEG_PER_SEC;
     if (m_softStartElapsed < SOFT_START_DURATION_SEC) {
         m_softStartElapsed += dtSeconds;
@@ -149,14 +145,12 @@ void MotionController::update(float dtSeconds) {
     RawLegAngles desiredAngles[LEG_COUNT];
 
     if (m_isRawMode) {
-        // Raw Mode: targets come directly from UI sliders
         for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
             desiredAngles[leg].alpha = m_rawTargetAngles[leg].alpha;
             desiredAngles[leg].beta  = m_rawTargetAngles[leg].beta;
             desiredAngles[leg].gamma = m_rawTargetAngles[leg].gamma;
         }
     } else {
-        // --- IK MODE ---
         m_currentPose.posX  = slewToward(m_currentPose.posX,  m_targetPose.posX,  maxLinDelta);
         m_currentPose.posY  = slewToward(m_currentPose.posY,  m_targetPose.posY,  maxLinDelta);
         m_currentPose.posZ  = slewToward(m_currentPose.posZ,  m_targetPose.posZ,  maxLinDelta);
@@ -185,21 +179,19 @@ void MotionController::update(float dtSeconds) {
         for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
             if (joints.leg[leg].isValid) {
                 desiredAngles[leg].alpha = joints.leg[leg].coxaDeg;
-                desiredAngles[leg].beta  = joints.leg[leg].femurDeg;
-                desiredAngles[leg].gamma = -joints.leg[leg].tibiaDeg; // Negate to match UI gamma convention
+                desiredAngles[leg].beta  = -joints.leg[leg].femurDeg; // FLIPPED: Match Native IK 'Down' to Raw UI 'Down'
+                desiredAngles[leg].gamma = joints.leg[leg].tibiaDeg;  // FLIPPED (Removed -): Match Native IK 'Outward' to Raw UI 'Outward'
             } else {
-                desiredAngles[leg] = m_rawCurrentAngles[leg]; // Hold previous angle if IK target is unreachable
+                desiredAngles[leg] = m_rawCurrentAngles[leg];
             }
         }
     }
 
-    // ── UNIFIED JOINT RATE LIMITER ACROSS ALL MODES ─────────────────────────
     for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
         m_rawCurrentAngles[leg].alpha = slewToward(m_rawCurrentAngles[leg].alpha, desiredAngles[leg].alpha, maxJointDelta);
         m_rawCurrentAngles[leg].beta  = slewToward(m_rawCurrentAngles[leg].beta,  desiredAngles[leg].beta,  maxJointDelta);
         m_rawCurrentAngles[leg].gamma = slewToward(m_rawCurrentAngles[leg].gamma, desiredAngles[leg].gamma, maxJointDelta);
 
-        // Keep applied angles perfectly in sync
         m_appliedAngles[leg].alpha = m_rawCurrentAngles[leg].alpha;
         m_appliedAngles[leg].beta  = m_rawCurrentAngles[leg].beta;
         m_appliedAngles[leg].gamma = -m_rawCurrentAngles[leg].gamma;

@@ -3,8 +3,6 @@
 #include "servo_config.h"
 #include "logger.h"
 
-
-
 void registerAllCommandHandlers(
     CommandDispatcher& dispatcher,
     ServoManager& servoMgr,
@@ -13,10 +11,8 @@ void registerAllCommandHandlers(
     MQTTManager& mqttMgr
 ) {
     dispatcher.registerHandler("heartbeat", [](const JsonDocument& doc) {
-        // updates g_lastCmdTime in setup()
     });
 
-    // 1. Single Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
         motionCtrl.setRawServoMode(true);
         uint8_t ch = doc["channel"] | 0;
@@ -25,70 +21,73 @@ void registerAllCommandHandlers(
         LOG_MOT("Direct Servo Write: Ch %d -> %d us", ch, rawPulse);
     });
 
-    // 2. Batch Servo Direct Write Handler
     dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
         motionCtrl.setRawServoMode(true);
-        
         JsonArrayConst servos = doc["servos"].as<JsonArrayConst>();
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
             uint16_t rawPulse = s["pulse_us"] | 1500;
-            servoMgr.setServoPulseUs(ch, rawPulse); // 
+            servoMgr.setServoPulseUs(ch, rawPulse);
         }
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
 
-    // 3. Motion Engine Handler (Velocity Vectors, Stances & 6-DOF Body Poses)
     dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
         servoMgr.setOutputsEnabled(true);
-        motionCtrl.setRawServoMode(false); // Ensure IK Engine is ACTIVE
+        motionCtrl.setRawServoMode(false); 
 
-        auto getF = [](const JsonDocument& d, const char* k1, const char* k2 = nullptr, const char* k3 = nullptr, float defVal = 0.0f) -> float {
+        auto getF = [](const JsonDocument& d, const char* k1, const char* k2 = nullptr, const char* k3 = nullptr, const char* k4 = nullptr, float defVal = 0.0f) -> float {
             if (k1 && !d[k1].isNull()) return d[k1].as<float>();
             if (k2 && !d[k2].isNull()) return d[k2].as<float>();
             if (k3 && !d[k3].isNull()) return d[k3].as<float>();
+            if (k4 && !d[k4].isNull()) return d[k4].as<float>();
             return defVal;
         };
 
-        // Check for Gait Mode Switch
         if (doc["gait"].is<const char*>()) {
             String gaitStr = doc["gait"].as<String>();
             gaitStr.toLowerCase();
-            if (gaitStr == "ripple") {
-                motionCtrl.setGaitType(GaitType::RIPPLE);
-            } else if (gaitStr == "wave") {
-                motionCtrl.setGaitType(GaitType::WAVE);
-            } else {
-                motionCtrl.setGaitType(GaitType::TRIPOD);
-            }
+            if (gaitStr == "ripple") motionCtrl.setGaitType(GaitType::RIPPLE);
+            else if (gaitStr == "wave") motionCtrl.setGaitType(GaitType::WAVE);
+            else motionCtrl.setGaitType(GaitType::TRIPOD);
         }
 
-        // Parse Velocity & Stance Parameters (REMOVED "rz" from omega to prevent collision with static yaw!)
         VelocityCommand vCmd;
-        vCmd.vx         = getF(doc, "vx", "Vx");
-        vCmd.vy         = getF(doc, "vy", "Vy");
-        vCmd.omega      = getF(doc, "omega", "w", "turn", 0.0f);
-        vCmd.stepHeight = getF(doc, "stepHeight", "step_height", "liftSwing", 25.0f);
-        vCmd.cycleTime  = getF(doc, "cycleTime", "cycle_time", "speed", 1.0f);
-        vCmd.legStance  = getF(doc, "legStance", "leg_stance", "stance", 0.0f);
-        vCmd.hipStance  = getF(doc, "hipStance", "hip_stance", "hipSwing", 0.0f);
+        vCmd.vx         = getF(doc, "vx", "Vx", nullptr, nullptr, 0.0f);
+        vCmd.vy         = getF(doc, "vy", "Vy", nullptr, nullptr, 0.0f);
+        vCmd.omega      = getF(doc, "omega", "w", "turn", nullptr, 0.0f);
+        vCmd.stepHeight = getF(doc, "stepHeight", "step_height", "liftSwing", nullptr, 25.0f);
+        vCmd.cycleTime  = getF(doc, "cycleTime", "cycle_time", "speed", nullptr, 1.0f);
+        vCmd.hipStance  = getF(doc, "hipStance", "hip_stance", "hipSwing", nullptr, 0.0f);
+        
+        // INVERTED: Matches UI slider up = legs splay out / body lowers
+        vCmd.legStance  = -getF(doc, "legStance", "leg_stance", "stance", nullptr, 0.0f); 
+        
         motionCtrl.setVelocity(vCmd);
 
-        // Parse 6-DOF Body Pose Shifts
+        float rawTx = getF(doc, "tx", "pos_x", "posX", "surge", 0.0f);
+        float rawTy = getF(doc, "ty", "pos_y", "posY", "sway", 0.0f);
+        float rawTz = getF(doc, "tz", "pos_z", "posZ", "heave", 0.0f);
+        float rawRx = getF(doc, "rx", "pitch", "Pitch", nullptr, 0.0f);
+        float rawRy = getF(doc, "ry", "roll",  "Roll",  nullptr, 0.0f);
+        float rawRz = getF(doc, "rz", "yaw",   "Yaw",   nullptr, 0.0f);
+
         BodyPose pose;
-        pose.posX  = getF(doc, "pos_x", "posX", "tx");
-        pose.posY  = getF(doc, "pos_y", "posY", "ty");
-        pose.posZ  = getF(doc, "pos_z", "posZ", "tz");
-        pose.roll  = getF(doc, "roll",  "rx",   "Roll");
-        pose.pitch = getF(doc, "pitch", "ry",   "Pitch");
-        pose.yaw   = getF(doc, "yaw",   "rz",   "Yaw");
+        pose.posX  =  rawTx;   // Surge (Forward/Back)
+        pose.posY  =  rawTy;   // Sway (Left/Right)
+        pose.posZ  =  rawTz;   // Heave (tz UP moves Body UP)
+        
+        // ALL ROTATIONS INVERTED: Flips the standard math right-hand-rule to match your UI sliders
+        pose.pitch = -rawRx;   // Pitch
+        pose.roll  = -rawRy;   // Roll 
+        pose.yaw   = -rawRz;   // Yaw
+        
         motionCtrl.setBodyPose(pose);
 
         LOG_MOT("Live IK Updated: Stance[Leg=%.1f, Hip=%.1f] Pose[X=%.1f, Y=%.1f, Z=%.1f, R=%.1f, P=%.1f, Y=%.1f]",
                 vCmd.legStance, vCmd.hipStance, pose.posX, pose.posY, pose.posZ, pose.roll, pose.pitch, pose.yaw);
     });
 
-    // 3.5 High-Level Pose Command Handler (Manual Servo Tab Only)
     dispatcher.registerHandler(CMD_TYPE_POSE, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
         if (doc["pose"].is<JsonObjectConst>()) {
             servoMgr.setOutputsEnabled(true);
@@ -110,40 +109,18 @@ void registerAllCommandHandlers(
             }
         }
     });
-    // 4. System Logging Handler
+
     dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr, &servoMgr](const JsonDocument& doc) {
-        if (doc["logging"].is<bool>()) {
-            g_logEnabled = doc["logging"].as<bool>();
-            LOG_SYS("Logging state: %d", g_logEnabled);
-        }
-        if (doc["command"].is<const char*>()) {
-            String cmd = doc["command"].as<String>();
-            if (cmd == "get_config") {
-                mqttMgr.sendConfig();
-                LOG_SYS("Configuration handshake published on request.");
-            }
-        }
-        if (doc["power"].is<bool>()) {
-            bool powerState = doc["power"].as<bool>();
-            servoMgr.setOutputsEnabled(powerState);
-        }
+        if (doc["logging"].is<bool>()) g_logEnabled = doc["logging"].as<bool>();
+        if (doc["command"].is<const char*>() && String(doc["command"].as<String>()) == "get_config") mqttMgr.sendConfig();
+        if (doc["power"].is<bool>()) servoMgr.setOutputsEnabled(doc["power"].as<bool>());
     });
 
-    // 5. OTA Update Handler
     dispatcher.registerHandler(CMD_TYPE_OTA, [&otaMgr](const JsonDocument& doc) {
-        bool forceFallback = doc["fallback"]     | false;
-        bool forcePrimary  = doc["primary"]      | false;
-
-        String customOwner = doc["owner"]        | "";
-        String customRepo  = doc["repo"]         | "";
-        String customBranch= doc["branch"]       | "";
-        String customPath  = doc["project_path"] | "";
-        String customPat   = doc["pat"]          | "";
-
-        LOG_SYS("Remote OTA command received via MQTT!");
         otaMgr.checkForUpdates(
-            forcePrimary, forceFallback,
-            customOwner, customRepo, customBranch, customPath, customPat
+            doc["primary"] | false, doc["fallback"] | false,
+            doc["owner"] | "", doc["repo"] | "", doc["branch"] | "", 
+            doc["project_path"] | "", doc["pat"] | ""
         );
     });
 }
