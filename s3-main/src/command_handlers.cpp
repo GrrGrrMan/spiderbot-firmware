@@ -32,6 +32,45 @@ void registerAllCommandHandlers(
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
 
+    // Dynamic Multi-Keyframe Sequence
+    dispatcher.registerHandler("sequence", [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        servoMgr.setOutputsEnabled(true);
+        if (doc["keyframes"].is<JsonArrayConst>()) {
+            uint32_t durationOverride = doc["duration_ms"] | 0;
+            motionCtrl.playSequence(doc["keyframes"].as<JsonArrayConst>(), durationOverride);
+            LOG_MOT("Sequence dispatched (%u keyframes)", doc["keyframes"].size());
+        }
+    });
+
+    // Timeline alias for sequences
+    dispatcher.registerHandler("timeline", [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        servoMgr.setOutputsEnabled(true);
+        if (doc["keyframes"].is<JsonArrayConst>()) {
+            motionCtrl.playSequence(doc["keyframes"].as<JsonArrayConst>());
+        }
+    });
+
+    // Single Keyframe: wrapped into a 1-element sequence
+    dispatcher.registerHandler(CMD_TYPE_KEYFRAME, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        servoMgr.setOutputsEnabled(true);
+        JsonDocument seqDoc;
+        JsonArray arr = seqDoc.to<JsonArray>();
+        arr.add(doc.as<JsonObjectConst>());
+        motionCtrl.playSequence(arr);
+        LOG_MOT("Single keyframe dispatched via SequencePoser");
+    });
+
+    // Legacy preset alias
+    dispatcher.registerHandler("preset", [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        servoMgr.setOutputsEnabled(true);
+        if (doc["keyframes"].is<JsonArrayConst>()) {
+            motionCtrl.playSequence(doc["keyframes"].as<JsonArrayConst>());
+        } else {
+            const char* presetName = doc["preset"] | "";
+            LOG_MOT("Preset command received: '%s'", presetName);
+        }
+    });
+
     dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
         servoMgr.setOutputsEnabled(true);
         motionCtrl.setRawServoMode(false); 
@@ -59,8 +98,6 @@ void registerAllCommandHandlers(
         vCmd.stepHeight = getF(doc, "stepHeight", "step_height", "liftSwing", nullptr, 25.0f);
         vCmd.cycleTime  = getF(doc, "cycleTime", "cycle_time", "speed", nullptr, 1.0f);
         vCmd.hipStance  = getF(doc, "hipStance", "hip_stance", "hipSwing", nullptr, 0.0f);
-        
-        // INVERTED: Matches UI slider up = legs splay out / body lowers
         vCmd.legStance  = -getF(doc, "legStance", "leg_stance", "stance", nullptr, 0.0f); 
         
         motionCtrl.setVelocity(vCmd);
@@ -73,14 +110,12 @@ void registerAllCommandHandlers(
         float rawRz = getF(doc, "rz", "yaw",   "Yaw",   nullptr, 0.0f);
 
         BodyPose pose;
-        pose.posX  =  rawTx;   // Surge (Forward/Back)
-        pose.posY  =  rawTy;   // Sway (Left/Right)
-        pose.posZ  =  rawTz;   // Heave (tz UP moves Body UP)
-        
-        // ALL ROTATIONS INVERTED: Flips the standard math right-hand-rule to match your UI sliders
-        pose.pitch = -rawRx;   // Pitch
-        pose.roll  = -rawRy;   // Roll 
-        pose.yaw   = -rawRz;   // Yaw
+        pose.posX  =  rawTx;
+        pose.posY  =  rawTy;
+        pose.posZ  =  rawTz;
+        pose.pitch = -rawRx;
+        pose.roll  = -rawRy;
+        pose.yaw   = -rawRz;
         
         motionCtrl.setBodyPose(pose);
 

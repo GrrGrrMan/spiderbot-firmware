@@ -6,6 +6,7 @@
 #include "ServoManager.h"
 #include "HexapodKinematics.h"
 #include "GaitGenerator.h"
+#include "SequencePoser.h"
 
 class MotionController {
 public:
@@ -13,18 +14,19 @@ public:
     ~MotionController();
 
     void begin();
-    
-    // Executed deterministically at 100Hz inside TaskControl on Core 1
     void update(float dtSeconds);
 
-    // Thread-safe command setters (invoked from Core 0 / TaskNetwork)
+    // Dynamic sequence loader (receives dynamic keyframe arrays over MQTT)
+    void playSequence(JsonArrayConst keyframes, uint32_t durationOverrideMs = 0);
+    void stopSequence();
+    bool isSequenceActive() const;
+
+    // Standard motion / pose controls
     void setBodyPose(const BodyPose& pose);
     void setVelocity(const VelocityCommand& cmd);
     void setGaitType(GaitType type);
     void setRawServoMode(bool enable);
     void setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma);
-
-    // Thread-safe readback for MQTT telemetry on Core 0 (Ghost Silhouette)
     void getRawLegAngles(uint8_t leg, float& alpha, float& beta, float& gamma);
 
 private:
@@ -32,20 +34,21 @@ private:
     ServoManager& m_servoMgr;
     HexapodKinematics m_kinematics;
     GaitGenerator m_gaitGen;
+    SequencePoser m_sequencePoser;
     SemaphoreHandle_t m_mutex;
 
     BodyPose m_targetPose;
-    BodyPose m_currentPose;           // Slewed pose actually applied each tick
+    BodyPose m_currentPose;           
     VelocityCommand m_velocityCmd;
-    VelocityCommand m_currentVelocity; // Slewed velocity actually applied each tick
+    VelocityCommand m_currentVelocity; 
     LegPosition m_footTargets[LEG_COUNT];
 
     struct RawLegAngles { float alpha, beta, gamma; };
-    RawLegAngles m_rawTargetAngles[LEG_COUNT];  // Latest MQTT-commanded raw pose per leg
-    RawLegAngles m_rawCurrentAngles[LEG_COUNT]; // Slewed raw angles actually written each tick
-    RawLegAngles m_appliedAngles[LEG_COUNT];    // Actual output angles for both IK and Raw modes
+    RawLegAngles m_rawTargetAngles[LEG_COUNT];  
+    RawLegAngles m_rawCurrentAngles[LEG_COUNT]; 
+    RawLegAngles m_appliedAngles[LEG_COUNT];    
 
-    float m_softStartElapsed;                   // Seconds elapsed since startup for smooth glide-in
+    float m_softStartElapsed;                   
 
     uint16_t degreesToTick(float angleDeg, bool invert, float neutralOffset);
 };

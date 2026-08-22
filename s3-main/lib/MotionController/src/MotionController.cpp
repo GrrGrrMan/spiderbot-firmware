@@ -1,15 +1,8 @@
 #include "MotionController.h"
 #include "servo_config.h"
 #include "logger.h"
+#include "motion_config.h"
 
-#define US_PER_DEGREE 11.11f
-#define MAX_JOINT_DEG_PER_SEC        180.0f
-#define SOFT_START_JOINT_DEG_PER_SEC  30.0f
-#define SOFT_START_DURATION_SEC        2.5f
-#define MAX_POSE_LINEAR_MM_PER_SEC   150.0f
-#define MAX_POSE_ANGULAR_DEG_PER_SEC  90.0f
-
-// ── TRUE Hardware Polarity matching physical UI mapping ──
 const bool LEG_COXA_INVERT[LEG_COUNT]  = { true, true, true, true, true, true }; 
 const bool LEG_FEMUR_INVERT[LEG_COUNT] = { true, true, true, true, true, true };
 const bool LEG_TIBIA_INVERT[LEG_COUNT] = { true, true, true, true, true, true };
@@ -20,7 +13,7 @@ MotionController::MotionController(ServoManager& servoMgr)
       m_softStartElapsed(0.0f) {
     m_mutex = xSemaphoreCreateMutex();
     m_targetPose = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
-    m_velocityCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f};
+    m_velocityCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
     m_currentPose = m_targetPose;
     m_currentVelocity = m_velocityCmd;
     for (int i = 0; i < LEG_COUNT; i++) {
@@ -43,23 +36,51 @@ void MotionController::begin() {
         m_mutex = xSemaphoreCreateMutex();
     }
     m_softStartElapsed = 0.0f;
+    m_sequencePoser.stop();
     for (int i = 0; i < LEG_COUNT; i++) {
         m_footTargets[i] = { DEFAULT_FOOT_X, DEFAULT_FOOT_Y, DEFAULT_FOOT_Z };
     }
 }
 
+void MotionController::playSequence(JsonArrayConst keyframes, uint32_t durationOverrideMs) {
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_isRawMode = false;
+        if (m_sequencePoser.loadSequence(keyframes, durationOverrideMs)) {
+            float alphas[LEG_COUNT], betas[LEG_COUNT], gammas[LEG_COUNT];
+            for (int i = 0; i < LEG_COUNT; i++) {
+                alphas[i] = m_rawCurrentAngles[i].alpha;
+                betas[i]  = m_rawCurrentAngles[i].beta;
+                gammas[i] = m_rawCurrentAngles[i].gamma;
+            }
+            m_sequencePoser.setStartFrame(m_currentPose, alphas, betas, gammas);
+        }
+        xSemaphoreGive(m_mutex);
+    }
+}
+
+void MotionController::stopSequence() {
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_sequencePoser.stop();
+        xSemaphoreGive(m_mutex);
+    }
+}
+
+bool MotionController::isSequenceActive() const {
+    return m_sequencePoser.isActive();
+}
+
 void MotionController::setRawServoMode(bool enable) {
     if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         m_isRawMode = enable;
+        m_sequencePoser.stop();
         xSemaphoreGive(m_mutex);
-    } else {
-        m_isRawMode = enable;
     }
 }
 
 void MotionController::setBodyPose(const BodyPose& pose) {
     if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         m_targetPose = pose;
+        m_sequencePoser.stop();
         xSemaphoreGive(m_mutex);
     }
 }
@@ -67,6 +88,7 @@ void MotionController::setBodyPose(const BodyPose& pose) {
 void MotionController::setVelocity(const VelocityCommand& cmd) {
     if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         m_velocityCmd = cmd;
+        m_sequencePoser.stop();
         xSemaphoreGive(m_mutex);
     }
 }
@@ -122,13 +144,8 @@ static inline float slewToward(float current, float target, float maxDelta) {
 }
 
 void MotionController::update(float dtSeconds) {
-    if (!m_servoMgr.isOutputsEnabled()) {
-        return;
-    }
-
-    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
-        return;
-    }
+    if (!m_servoMgr.isOutputsEnabled()) return;
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(5)) != pdTRUE) return;
 
     float currentMaxJointSpeed = MAX_JOINT_DEG_PER_SEC;
     if (m_softStartElapsed < SOFT_START_DURATION_SEC) {
@@ -144,13 +161,41 @@ void MotionController::update(float dtSeconds) {
 
     RawLegAngles desiredAngles[LEG_COUNT];
 
+    // ── MODE 1: Direct Raw Override ──
     if (m_isRawMode) {
         for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
             desiredAngles[leg].alpha = m_rawTargetAngles[leg].alpha;
             desiredAngles[leg].beta  = m_rawTargetAngles[leg].beta;
             desiredAngles[leg].gamma = m_rawTargetAngles[leg].gamma;
         }
-    } else {
+    }
+    // ── MODE 2: Dynamic Sequence Poser (Modular Keyframes) ──
+    else if (m_sequencePoser.isActive()) {
+        PoserOutput pOut = m_sequencePoser.update(millis());
+        m_currentPose = pOut.bodyPose;
+
+        for (int i = 0; i < LEG_COUNT; i++) {
+            m_footTargets[i] = { DEFAULT_FOOT_X, DEFAULT_FOOT_Y, DEFAULT_FOOT_Z };
+        }
+
+        HexapodJoints joints = m_kinematics.computeBodyPose(m_currentPose, m_footTargets);
+
+        for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
+            if (pOut.overrideJoints[leg]) {
+                desiredAngles[leg].alpha = pOut.alpha[leg];
+                desiredAngles[leg].beta  = pOut.beta[leg];
+                desiredAngles[leg].gamma = pOut.gamma[leg];
+            } else if (joints.leg[leg].isValid) {
+                desiredAngles[leg].alpha = joints.leg[leg].coxaDeg;
+                desiredAngles[leg].beta  = -joints.leg[leg].femurDeg;
+                desiredAngles[leg].gamma = joints.leg[leg].tibiaDeg;
+            } else {
+                desiredAngles[leg] = m_rawCurrentAngles[leg];
+            }
+        }
+    }
+    // ── MODE 3: Continuous Gait & Slew Stance ──
+    else {
         m_currentPose.posX  = slewToward(m_currentPose.posX,  m_targetPose.posX,  maxLinDelta);
         m_currentPose.posY  = slewToward(m_currentPose.posY,  m_targetPose.posY,  maxLinDelta);
         m_currentPose.posZ  = slewToward(m_currentPose.posZ,  m_targetPose.posZ,  maxLinDelta);
@@ -179,14 +224,15 @@ void MotionController::update(float dtSeconds) {
         for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
             if (joints.leg[leg].isValid) {
                 desiredAngles[leg].alpha = joints.leg[leg].coxaDeg;
-                desiredAngles[leg].beta  = -joints.leg[leg].femurDeg; // FLIPPED: Match Native IK 'Down' to Raw UI 'Down'
-                desiredAngles[leg].gamma = joints.leg[leg].tibiaDeg;  // FLIPPED (Removed -): Match Native IK 'Outward' to Raw UI 'Outward'
+                desiredAngles[leg].beta  = -joints.leg[leg].femurDeg;
+                desiredAngles[leg].gamma = joints.leg[leg].tibiaDeg;
             } else {
                 desiredAngles[leg] = m_rawCurrentAngles[leg];
             }
         }
     }
 
+    // ── Hardware Output Stage ──
     for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
         m_rawCurrentAngles[leg].alpha = slewToward(m_rawCurrentAngles[leg].alpha, desiredAngles[leg].alpha, maxJointDelta);
         m_rawCurrentAngles[leg].beta  = slewToward(m_rawCurrentAngles[leg].beta,  desiredAngles[leg].beta,  maxJointDelta);

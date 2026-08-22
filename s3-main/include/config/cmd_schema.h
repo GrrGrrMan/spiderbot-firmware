@@ -7,14 +7,15 @@
 #define CMD_TYPE_MOTION       "motion"
 #define CMD_TYPE_SYSTEM       "system"
 #define CMD_TYPE_POSE         "pose"
+#define CMD_TYPE_KEYFRAME     "keyframe"     // Single smooth keyframe transition
+#define CMD_TYPE_TIMELINE     "timeline"     // Sequence of keyframes / modes
 #define CMD_TYPE_OTA          "ota" 
 
 inline void buildConfigPayload(JsonDocument& doc, const String& deviceId) {
     doc["device_id"] = deviceId;
     
     JsonObject dims = doc["dimensions"].to<JsonObject>();
-    dims["coxa"]  = COXA_LENGTH_MM;
-    dims["coxia"] = COXA_LENGTH_MM;
+    dims["coxa"]              = COXA_LENGTH_MM;
     dims["femur"]             = FEMUR_LENGTH_MM;
     dims["tibia"]             = TIBIA_LENGTH_MM;
     dims["body_length"]       = BODY_LENGTH_MM;

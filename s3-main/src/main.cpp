@@ -2,7 +2,7 @@
 //
 // Dual-Core FreeRTOS Architecture:
 //   TaskNetwork (Core 0): Wi-Fi + MQTT + Log Sink + Telemetry + Base64 Stream Decoding
-//   TaskControl (Core 1): 100 Hz Kinematics Loop + Safety Watchdog + PCA9685 Servos
+//   TaskControl (Core 1): 100 Hz Kinematics Loop + Two-Stage Watchdog + PCA9685 Servos
 //   TaskAudio   (Core 1): I2S Audio DMA Consumer (RingBuffer Stream + Tones + Alarms)
 
 #include <Arduino.h>
@@ -19,10 +19,11 @@
 #include "LogSink.h"
 #include "net_config.h"
 #include "servo_config.h"
+#include "audio_config.h"
+#include "motion_config.h"
 #include "logger.h"
 #include "command_handlers.h"
 #include "AudioManager.h"
-#include "audio_config.h"
 #include "TTSStreamer.h"
 #include "esp_heap_caps.h"
 
@@ -36,13 +37,14 @@ CommandDispatcher cmdDispatcher;
 AudioManager     audioManager;
 TTSStreamer      ttsStreamer;
 
-volatile unsigned long g_lastCmdTime = 0;
+volatile unsigned long g_lastActivityTime = 0;
+volatile unsigned long g_lastMotionCmdTime = 0;
 
 // Audio command tokens sent from TaskNetwork (Core 0) to TaskAudio (Core 1)
 enum class AudioCommandType : uint8_t {
     TONE       = 0,
     ALARM      = 1,
-    TTS_STREAM = 2,
+    TTS_START  = 2,
     TTS_END    = 3
 };
 
@@ -77,14 +79,14 @@ void setup() {
     pinMode(PIN_PCA_OE, OUTPUT);
     digitalWrite(PIN_PCA_OE, HIGH); // Assert OE high immediately on reset
     Serial.begin(115200);
-    delay(1000);
+    delay(500);
 
     g_logSink.begin(25);
     LOG_SYS("Booting s3-main (ESP32-S3 Servo & Streaming Audio Node)...");
 
     otaManager.begin();
 
-    // 512KB RingBuffer in PSRAM (holds ~12s speech without frame drops)
+    // 512KB RingBuffer in PSRAM
     if (psramFound()) {
         StaticRingbuffer_t *rb_struct = (StaticRingbuffer_t *)heap_caps_malloc(sizeof(StaticRingbuffer_t), MALLOC_CAP_SPIRAM);
         uint8_t *rb_storage = (uint8_t *)heap_caps_malloc(512 * 1024, MALLOC_CAP_SPIRAM);
@@ -102,19 +104,23 @@ void setup() {
         LOG_SYS("Allocated 48KB Internal SRAM RingBuffer fallback");
     }
 
-    g_audioQueue = xQueueCreate(8, sizeof(AudioCommand));
+    g_audioQueue = xQueueCreate(16, sizeof(AudioCommand));
     ttsStreamer.begin();
 
     registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController, mqttManager);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
-        g_lastCmdTime = millis();
+        unsigned long now = millis();
+        g_lastActivityTime = now;
+        
+        if (type == "motion" || type == "keyframe" || type == "pose" || type == "sequence" || type == "preset") {
+            g_lastMotionCmdTime = now;
+        }
         cmdDispatcher.dispatch(type, doc);
     });
 
-    // Dedicated MQTT audio receiver (Core 0 decodes Base64; zero I2S blocking)
     mqttManager.setAudioCommandCallback([](const String& action, JsonDocument& doc) {
-        g_lastCmdTime = millis();
+        g_lastActivityTime = millis();
 
         if (action == "tts") {
             const char* flowId  = doc["flow_id"] | "";
@@ -124,6 +130,9 @@ void setup() {
 
             if (seq == 0) {
                 mqttManager.sendAudioStatus("playing", "tts");
+                AudioCommand startCmd{};
+                startCmd.type = AudioCommandType::TTS_START;
+                if (g_audioQueue) xQueueSend(g_audioQueue, &startCmd, 0);
             }
 
             int16_t* pcmChunk = nullptr;
@@ -132,20 +141,17 @@ void setup() {
             TTSStreamer::FeedResult res = ttsStreamer.feed(flowId, seq, total, payload, &pcmChunk, &samples);
 
             if (samples > 0 && pcmChunk != nullptr && g_pcmRingBuffer) {
-                BaseType_t ok = xRingbufferSend(g_pcmRingBuffer, pcmChunk, samples * sizeof(int16_t), pdMS_TO_TICKS(200));
+                BaseType_t ok = xRingbufferSend(g_pcmRingBuffer, pcmChunk, samples * sizeof(int16_t), pdMS_TO_TICKS(50));
                 if (ok != pdTRUE) {
                     LOG_ERR("AUDIO: RingBuffer full! Frame %u dropped.", seq);
                 }
             }
 
-            AudioCommand cmd{};
             if (res == TTSStreamer::FeedResult::FLOW_COMPLETE) {
                 ttsStreamer.resetFlow();
-                cmd.type = AudioCommandType::TTS_END;
-                if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, portMAX_DELAY);
-            } else if (res == TTSStreamer::FeedResult::CHUNK_READY || res == TTSStreamer::FeedResult::OK) {
-                cmd.type = AudioCommandType::TTS_STREAM;
-                if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
+                AudioCommand endCmd{};
+                endCmd.type = AudioCommandType::TTS_END;
+                if (g_audioQueue) xQueueSend(g_audioQueue, &endCmd, pdMS_TO_TICKS(20));
             } else if (res == TTSStreamer::FeedResult::ERROR) {
                 ttsStreamer.resetFlow();
                 mqttManager.sendAudioStatus("error", "tts");
@@ -157,7 +163,7 @@ void setup() {
         if (action == "beep" || action == "play") {
             cmd.type = AudioCommandType::TONE;
             cmd.freqHz = (action == "play") ? 660 : 1200;
-            cmd.ms = 120;
+            cmd.ms = 100;
             mqttManager.sendAudioStatus("playing", action.c_str());
             if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
         } else if (action == "alarm") {
@@ -195,13 +201,11 @@ void TaskNetwork(void *pvParameters) {
         }
 
         if (netConnected && mqttManager.isConnected()) {
-            // ── 1. High-Priority: Publish Audio Status Instantly (Zero Delay) ──
             if (g_audioDonePending) {
                 g_audioDonePending = false;
                 mqttManager.sendAudioStatus("idle", g_audioIdleAction[0] ? g_audioIdleAction : "tts");
             }
 
-            // ── 2. Periodic 100ms Telemetry & Log Drain ──
             unsigned long now = millis();
             if (now - s_lastTelemetryMs >= 100) {
                 s_lastTelemetryMs = now;
@@ -224,15 +228,13 @@ void TaskNetwork(void *pvParameters) {
                 telemetry["ip"]        = netManager.getLocalIP();
                 telemetry["hotspot"]   = netManager.isHotspot();
                 telemetry["power"]     = servoManager.isOutputsEnabled();
-                
-                // Authoritative ground-truth audio state in telemetry
                 telemetry["audio"]     = isAudioBusy() ? "playing" : "idle";
                 
                 mqttManager.sendTelemetry(telemetry);
             }
         }
 
-        vTaskDelay(pdMS_TO_TICKS(1));
+        vTaskDelay(pdMS_TO_TICKS(2));
     }
 }
 
@@ -240,34 +242,57 @@ void TaskControl(void *pvParameters) {
     servoManager.begin();
     LOG_SYS("S3 Servo Manager ready");
 
-    if (audioManager.begin()) {
-        // Non-blocking: dispatch startup alarm asynchronously to TaskAudio
-        AudioCommand cmd{};
-        cmd.type = AudioCommandType::ALARM;
-        strncpy(cmd.alarmName, "idle", sizeof(cmd.alarmName) - 1);
-        if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
-    }
-
+    audioManager.begin();
     motionController.begin();
-    
-    // Enable servo outputs once registers are primed and motion loop is ready
-    servoManager.setOutputsEnabled(true);
+
+    // Initialize activity timer at boot
+    g_lastActivityTime = millis();
 
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10);
+    
+    unsigned long activeMotionStartMs = 0;
 
     for (;;) {
+        unsigned long now = millis();
+        bool isMoving = motionController.isSequenceActive();
         bool audioActive = isAudioBusy();
-        if (audioActive) {
-            g_lastCmdTime = millis();
+
+        // Refresh activity timestamps during active playback
+        if (isMoving || audioActive) {
+            g_lastActivityTime = now;
+            g_lastMotionCmdTime = now;
         }
 
-        if (g_lastCmdTime > 0 && (millis() - g_lastCmdTime > 3000)) {
-            VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
-            motionController.setVelocity(stopCmd);
+        // ── WATCHDOG STAGE 1: Motion Velocity Timeout (2.5s) ──
+        if (g_lastMotionCmdTime > 0) {
+            if (activeMotionStartMs == 0) activeMotionStartMs = now;
+
+            // 15s Continuous Movement Safety Cap
+            if (now - activeMotionStartMs > MAX_CONTINUOUS_MOTION_MS) {
+                VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
+                motionController.setVelocity(stopCmd);
+                motionController.stopSequence();
+                activeMotionStartMs = 0;
+                g_lastMotionCmdTime = 0;
+                LOG_ERR("Safety Cap: Continuous motion exceeded %ums -> Forced idle stance.", MAX_CONTINUOUS_MOTION_MS);
+            }
+            // Auto-brake velocity to 0 if connection dropped while walking
+            else if (now - g_lastMotionCmdTime > MOTION_WATCHDOG_TIMEOUT_MS) {
+                VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
+                motionController.setVelocity(stopCmd);
+                activeMotionStartMs = 0;
+                g_lastMotionCmdTime = 0;
+                LOG_MOT("Motion Watchdog: Velocity timed out -> holding stance.");
+            }
+        } else {
+            activeMotionStartMs = 0;
+        }
+
+        // ── WATCHDOG STAGE 2: Inactivity Sleep / Limp Mode (6.0s) ──
+        if (servoManager.isOutputsEnabled() && (now - g_lastActivityTime > INACTIVITY_SLEEP_TIMEOUT_MS)) {
             servoManager.setOutputsEnabled(false);
-            g_lastCmdTime = 0;
-            LOG_ERR("Watchdog Timeout! Connection lost. Halting motion and disabling servos.");
+            LOG_SYS("Inactivity Watchdog: 6s idle -> Servos powered down (LIMP/Sleep).");
         }
 
         motionController.update(0.01f);
@@ -280,10 +305,10 @@ void TaskAudio(void *pvParameters) {
     bool isStreamingTts = false;
     bool isPrebuffered  = false;
 
-    const size_t INITIAL_PREBUFFER = 22050; // 500ms safety cushion prevents stuttering
+    const size_t INITIAL_PREBUFFER = 11025; // 250ms safety cushion
 
     for (;;) {
-        TickType_t waitTicks = isStreamingTts ? pdMS_TO_TICKS(2) : portMAX_DELAY;
+        TickType_t waitTicks = isStreamingTts ? pdMS_TO_TICKS(5) : portMAX_DELAY;
 
         if (xQueueReceive(g_audioQueue, &cmd, waitTicks) == pdTRUE) {
             switch (cmd.type) {
@@ -301,22 +326,22 @@ void TaskAudio(void *pvParameters) {
                     g_audioDonePending = true;
                     break;
 
-                case AudioCommandType::TTS_STREAM:
+                case AudioCommandType::TTS_START:
                     isStreamingTts = true;
+                    isPrebuffered  = false;
                     break;
 
                 case AudioCommandType::TTS_END:
                     if (g_pcmRingBuffer) {
                         size_t itemSize = 0;
                         while (true) {
-                            void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(50), 2048);
+                            void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(10), 1024);
                             if (!item || itemSize == 0) break;
                             audioManager.writePcmChunk((const int16_t*)item, itemSize / sizeof(int16_t));
                             vRingbufferReturnItem(g_pcmRingBuffer, item);
+                            taskYIELD();
                         }
                     }
-
-                    vTaskDelay(pdMS_TO_TICKS(200));
 
                     audioManager.stop();
                     ttsStreamer.resetFlow();
@@ -338,18 +363,17 @@ void TaskAudio(void *pvParameters) {
                 if (waitingBytes >= INITIAL_PREBUFFER) {
                     isPrebuffered = true;
                 } else {
-                    vTaskDelay(pdMS_TO_TICKS(2));
+                    vTaskDelay(pdMS_TO_TICKS(5));
                     continue;
                 }
             }
 
             size_t itemSize = 0;
-            void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(2), 2048);
+            void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(5), 1024);
             if (item && itemSize > 0) {
                 audioManager.writePcmChunk((const int16_t*)item, itemSize / sizeof(int16_t));
                 vRingbufferReturnItem(g_pcmRingBuffer, item);
             } else if (waitingBytes == 0) {
-                isPrebuffered = false;
                 vTaskDelay(pdMS_TO_TICKS(5));
             }
         }

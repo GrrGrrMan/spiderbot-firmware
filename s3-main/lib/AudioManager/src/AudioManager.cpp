@@ -5,15 +5,13 @@
 
 #define DMA_CHUNK_SAMPLES 256
 
-// ── Constructor ──────────────────────────────────────────────────────────────
 AudioManager::AudioManager()
     : m_state(AudioState::IDLE),
-      m_volume(1.0f),
-      m_volQ15(32767),
+      m_volume(AUDIO_DEFAULT_VOLUME),
+      m_volQ15((int32_t)(AUDIO_DEFAULT_VOLUME * 32767.0f)),
       m_port(AUDIO_I2S_NUM),
       m_initialized(false) {}
 
-// ── Begin / Hardware Init ───────────────────────────────────────────────────
 bool AudioManager::begin() {
 #if AUDIO_SIM_MODE
     m_initialized = true;
@@ -26,13 +24,13 @@ bool AudioManager::begin() {
     cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate          = AUDIO_SAMPLE_RATE;
     cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
-    cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT; // Dual-channel for 3.3V & 5V compatibility
+    cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count        = 8;
     cfg.dma_buf_len          = 512;
     cfg.use_apll             = true;
-    cfg.tx_desc_auto_clear   = true;  // Hardware writes zeros on underrun (prevents pops)
+    cfg.tx_desc_auto_clear   = true;
 
     esp_err_t err = i2s_driver_install(m_port, &cfg, 0, NULL);
     if (err != ESP_OK) {
@@ -58,10 +56,10 @@ bool AudioManager::begin() {
 
     m_initialized = true;
     m_state = AudioState::IDLE;
-    setVolume(m_volume);
+    setVolume(AUDIO_DEFAULT_VOLUME);
 
-    LOG_SYS("AUDIO I2S ready (BCLK=%d LRC=%d DIN=%d @%uHz)",
-            PIN_AUDIO_BCLK, PIN_AUDIO_LRC, PIN_AUDIO_DIN, AUDIO_SAMPLE_RATE);
+    LOG_SYS("AUDIO I2S ready (Vol: %.0f%%, BCLK=%d LRC=%d DIN=%d @%uHz)",
+            m_volume * 100.0f, PIN_AUDIO_BCLK, PIN_AUDIO_LRC, PIN_AUDIO_DIN, AUDIO_SAMPLE_RATE);
     return true;
 }
 
@@ -100,7 +98,7 @@ size_t AudioManager::writePcmChunk(const int16_t* samples, size_t count) {
     return count * sizeof(int16_t);
 #endif
 
-    int16_t stereoBuffer[DMA_CHUNK_SAMPLES * 2]; // Interleaved [L, R, L, R, ...]
+    int16_t stereoBuffer[DMA_CHUNK_SAMPLES * 2];
     size_t writtenTotal = 0;
     size_t idx = 0;
 
@@ -112,8 +110,8 @@ size_t AudioManager::writePcmChunk(const int16_t* samples, size_t count) {
             if (m_volQ15 < 32767) {
                 sample = (int16_t)(((int32_t)sample * m_volQ15) >> 15);
             }
-            stereoBuffer[i * 2]     = sample; // Left channel
-            stereoBuffer[i * 2 + 1] = sample; // Right channel
+            stereoBuffer[i * 2]     = sample;
+            stereoBuffer[i * 2 + 1] = sample;
         }
 
         size_t bytesWritten = 0;
@@ -142,14 +140,13 @@ bool AudioManager::playPcm(const int16_t* samples, size_t count) {
     return true;
 }
 
-// Generates sine beeps with smooth 5ms fade-in / fade-out to prevent speaker pop
 bool AudioManager::playTone(uint16_t freqHz, uint16_t ms) {
     if (!m_initialized) return false;
 
     size_t totalSamples = (size_t)((uint32_t)AUDIO_SAMPLE_RATE * ms / 1000);
     if (totalSamples == 0) return true;
 
-    size_t rampSamples = (AUDIO_SAMPLE_RATE * 5) / 1000; // 5ms ramp
+    size_t rampSamples = (AUDIO_SAMPLE_RATE * 5) / 1000;
     if (rampSamples > totalSamples / 2) rampSamples = totalSamples / 2;
 
     const float step = 2.0f * (float)M_PI * (float)freqHz / (float)AUDIO_SAMPLE_RATE;
@@ -161,7 +158,7 @@ bool AudioManager::playTone(uint16_t freqHz, uint16_t ms) {
 
         for (size_t k = 0; k < n; k++) {
             size_t currentSample = generated + k;
-            float sample = sinf((float)currentSample * step) * 20000.0f;
+            float sample = sinf((float)currentSample * step) * AUDIO_TONE_AMPLITUDE; // Safe lower amplitude
 
             if (currentSample < rampSamples) {
                 sample *= ((float)currentSample / (float)rampSamples);
@@ -178,7 +175,6 @@ bool AudioManager::playTone(uint16_t freqHz, uint16_t ms) {
     }
 
     m_state = AudioState::IDLE;
-    LOG_SYS("AUDIO beep (%uHz,%ums) wrote ~%u bytes", freqHz, ms, (unsigned)(totalSamples * 2));
     return true;
 }
 
@@ -186,16 +182,15 @@ bool AudioManager::playAlarm(const char* name) {
     if (!name) return false;
 
     if (strcmp(name, "startle") == 0) {
-        playTone(880, 140); playTone(1100, 90); playTone(880, 140);
+        playTone(880, 100); playTone(1100, 70); playTone(880, 100);
     } else if (strcmp(name, "curious") == 0) {
-        playTone(660, 110); playTone(740, 110); playTone(880, 110);
+        playTone(660, 80); playTone(740, 80); playTone(880, 80);
     } else if (strcmp(name, "idle") == 0) {
-        playTone(440, 160);
+        playTone(440, 100);
     } else {
-        playTone(520, 200);
+        playTone(520, 120);
     }
 
     m_state = AudioState::IDLE;
-    LOG_SYS("AUDIO alarm '%s' played", name);
     return true;
 }
