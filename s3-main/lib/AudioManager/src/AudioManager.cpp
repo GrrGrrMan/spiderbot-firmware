@@ -5,6 +5,7 @@
 
 #define DMA_CHUNK_SAMPLES 256
 
+// ── Constructor ──────────────────────────────────────────────────────────────
 AudioManager::AudioManager()
     : m_state(AudioState::IDLE),
       m_volume(1.0f),
@@ -12,6 +13,7 @@ AudioManager::AudioManager()
       m_port(AUDIO_I2S_NUM),
       m_initialized(false) {}
 
+// ── Begin / Hardware Init ───────────────────────────────────────────────────
 bool AudioManager::begin() {
 #if AUDIO_SIM_MODE
     m_initialized = true;
@@ -24,7 +26,7 @@ bool AudioManager::begin() {
     cfg.mode                 = (i2s_mode_t)(I2S_MODE_MASTER | I2S_MODE_TX);
     cfg.sample_rate          = AUDIO_SAMPLE_RATE;
     cfg.bits_per_sample      = I2S_BITS_PER_SAMPLE_16BIT;
-    cfg.channel_format       = I2S_CHANNEL_FMT_ONLY_RIGHT;
+    cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT; // Dual-channel for 3.3V & 5V compatibility
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count        = 8;
@@ -52,7 +54,7 @@ bool AudioManager::begin() {
         return false;
     }
 
-    i2s_set_clk(m_port, AUDIO_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_MONO);
+    i2s_set_clk(m_port, AUDIO_SAMPLE_RATE, I2S_BITS_PER_SAMPLE_16BIT, I2S_CHANNEL_STEREO);
 
     m_initialized = true;
     m_state = AudioState::IDLE;
@@ -98,21 +100,36 @@ size_t AudioManager::writePcmChunk(const int16_t* samples, size_t count) {
     return count * sizeof(int16_t);
 #endif
 
-    int16_t scaled[DMA_CHUNK_SAMPLES]; // Local stack buffer (thread-safe, replaces static)
+    int16_t stereoBuffer[DMA_CHUNK_SAMPLES * 2]; // Interleaved [L, R, L, R, ...]
     size_t writtenTotal = 0;
     size_t idx = 0;
 
     while (idx < count) {
         size_t chunk = (count - idx) > DMA_CHUNK_SAMPLES ? DMA_CHUNK_SAMPLES : (count - idx);
-        applyGain(scaled, &samples[idx], chunk);
+
+        for (size_t i = 0; i < chunk; i++) {
+            int16_t sample = samples[idx + i];
+            if (m_volQ15 < 32767) {
+                sample = (int16_t)(((int32_t)sample * m_volQ15) >> 15);
+            }
+            stereoBuffer[i * 2]     = sample; // Left channel
+            stereoBuffer[i * 2 + 1] = sample; // Right channel
+        }
 
         size_t bytesWritten = 0;
-        esp_err_t err = i2s_write(m_port, scaled, chunk * sizeof(int16_t), &bytesWritten, pdMS_TO_TICKS(100));
+        esp_err_t err = i2s_write(
+            m_port,
+            stereoBuffer,
+            chunk * 2 * sizeof(int16_t),
+            &bytesWritten,
+            pdMS_TO_TICKS(100)
+        );
+
         if (err != ESP_OK) {
             m_state = AudioState::ERROR;
             break;
         }
-        writtenTotal += bytesWritten;
+        writtenTotal += (bytesWritten / 2);
         idx += chunk;
     }
     return writtenTotal;

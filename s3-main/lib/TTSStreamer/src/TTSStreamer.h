@@ -13,6 +13,7 @@ public:
         const String& b64Payload, int16_t** outPcm, size_t* outSamples
     );
     void resetFlow();
+    bool isActive() const { return m_activeFlowId.length() > 0; }
 
 private:
     static uint8_t b64Value(char c);

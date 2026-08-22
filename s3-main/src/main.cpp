@@ -62,6 +62,17 @@ void TaskNetwork(void *pvParameters);
 void TaskControl(void *pvParameters);
 void TaskAudio(void *pvParameters);
 
+static inline bool isAudioBusy() {
+    size_t ringBufBytes = 0;
+    if (g_pcmRingBuffer) {
+        vRingbufferGetInfo(g_pcmRingBuffer, nullptr, nullptr, nullptr, nullptr, &ringBufBytes);
+    }
+    return (audioManager.state() == AudioState::PLAYING) || 
+           (ringBufBytes > 0) || 
+           g_audioDonePending || 
+           ttsStreamer.isActive();
+}
+
 void setup() {
     pinMode(PIN_PCA_OE, OUTPUT);
     digitalWrite(PIN_PCA_OE, HIGH); // Assert OE high immediately on reset
@@ -129,6 +140,7 @@ void setup() {
 
             AudioCommand cmd{};
             if (res == TTSStreamer::FeedResult::FLOW_COMPLETE) {
+                ttsStreamer.resetFlow();
                 cmd.type = AudioCommandType::TTS_END;
                 if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, portMAX_DELAY);
             } else if (res == TTSStreamer::FeedResult::CHUNK_READY || res == TTSStreamer::FeedResult::OK) {
@@ -182,33 +194,41 @@ void TaskNetwork(void *pvParameters) {
             mqttManager.update(netConnected, brokerHost);
         }
 
-        unsigned long now = millis();
-        if (netConnected && mqttManager.isConnected() && (now - s_lastTelemetryMs >= 100)) {
-            s_lastTelemetryMs = now;
-
-            if (!s_bootValidated) {
-                s_bootValidated = true;
-                otaManager.validateBootImage();
-                mqttManager.sendConfig();
-            }
-
-            LogEntry entry;
-            if (g_logSink.pop(entry)) {
-                mqttManager.sendLog(entry.message);
-            }
-
-            JsonDocument telemetry;
-            telemetry["uptime"]    = now / 1000;
-            telemetry["free_heap"] = ESP.getFreeHeap();
-            telemetry["rssi"]      = WiFi.RSSI();
-            telemetry["ip"]        = netManager.getLocalIP();
-            telemetry["hotspot"]   = netManager.isHotspot();
-            telemetry["power"]     = servoManager.isOutputsEnabled();
-            mqttManager.sendTelemetry(telemetry);
-
+        if (netConnected && mqttManager.isConnected()) {
+            // ── 1. High-Priority: Publish Audio Status Instantly (Zero Delay) ──
             if (g_audioDonePending) {
                 g_audioDonePending = false;
                 mqttManager.sendAudioStatus("idle", g_audioIdleAction[0] ? g_audioIdleAction : "tts");
+            }
+
+            // ── 2. Periodic 100ms Telemetry & Log Drain ──
+            unsigned long now = millis();
+            if (now - s_lastTelemetryMs >= 100) {
+                s_lastTelemetryMs = now;
+
+                if (!s_bootValidated) {
+                    s_bootValidated = true;
+                    otaManager.validateBootImage();
+                    mqttManager.sendConfig();
+                }
+
+                LogEntry entry;
+                if (g_logSink.pop(entry)) {
+                    mqttManager.sendLog(entry.message);
+                }
+
+                JsonDocument telemetry;
+                telemetry["uptime"]    = now / 1000;
+                telemetry["free_heap"] = ESP.getFreeHeap();
+                telemetry["rssi"]      = WiFi.RSSI();
+                telemetry["ip"]        = netManager.getLocalIP();
+                telemetry["hotspot"]   = netManager.isHotspot();
+                telemetry["power"]     = servoManager.isOutputsEnabled();
+                
+                // Authoritative ground-truth audio state in telemetry
+                telemetry["audio"]     = isAudioBusy() ? "playing" : "idle";
+                
+                mqttManager.sendTelemetry(telemetry);
             }
         }
 
@@ -237,8 +257,8 @@ void TaskControl(void *pvParameters) {
     const TickType_t xFrequency = pdMS_TO_TICKS(10);
 
     for (;;) {
-        bool isAudioBusy = (audioManager.state() == AudioState::PLAYING);
-        if (isAudioBusy) {
+        bool audioActive = isAudioBusy();
+        if (audioActive) {
             g_lastCmdTime = millis();
         }
 
@@ -299,6 +319,7 @@ void TaskAudio(void *pvParameters) {
                     vTaskDelay(pdMS_TO_TICKS(200));
 
                     audioManager.stop();
+                    ttsStreamer.resetFlow();
                     isStreamingTts = false;
                     isPrebuffered  = false;
                     strncpy(g_audioIdleAction, "tts", sizeof(g_audioIdleAction) - 1);
