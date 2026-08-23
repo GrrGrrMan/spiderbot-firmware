@@ -22,7 +22,9 @@ static const char* CAM_STREAM_PART_HEADER =
 static bool s_isStreamingActive = false;
 
 static esp_err_t handleStreamRequest(httpd_req_t* req) {
-    // 1. Guard against multi-tab camera crashes
+    // Always set CORS headers first so browser doesn't block errors
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+
     if (s_isStreamingActive) {
         LOG_ERR("CAM: Connection rejected — another client is already streaming.");
         httpd_resp_set_status(req, "429 Too Many Requests");
@@ -31,10 +33,9 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
     }
     s_isStreamingActive = true;
 
-    // 2. Set CORS and Stream Headers
+    // Set stream headers
     esp_err_t res = httpd_resp_set_type(req, CAM_STREAM_CONTENT_TYPE);
     if (res == ESP_OK) {
-        res = httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
         res = httpd_resp_set_hdr(req, "X-Framerate", String(CAM_TARGET_FPS).c_str());
     }
 
@@ -51,7 +52,6 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
     while (res == ESP_OK) {
         const int64_t frameStartUs = esp_timer_get_time();
 
-        // 3. Acquire frame from DMA (guaranteed latest frame)
         camera_fb_t* fb = esp_camera_fb_get();
         if (!fb) {
             LOG_ERR("CAM: Frame capture failed.");
@@ -72,7 +72,6 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
             }
         }
 
-        // 4. Send boundary + headers + JPEG buffer
         res = httpd_resp_send_chunk(req, CAM_STREAM_BOUNDARY, strlen(CAM_STREAM_BOUNDARY));
         if (res == ESP_OK) {
             char partHdr[64];
@@ -86,18 +85,17 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
         }
 
         if (ownsJpg) free(jpgBuf);
-        esp_camera_fb_return(fb); // Release DMA buffer immediately
+        esp_camera_fb_return(fb);
 
-        if (res != ESP_OK) break; // Client disconnected or socket broken
+        if (res != ESP_OK) break;
 
-        // 5. High-precision FPS throttle & cooperative FreeRTOS yield
         const int64_t elapsedUs = esp_timer_get_time() - frameStartUs;
         const int64_t remainingUs = framePeriodUs - elapsedUs;
         
         if (remainingUs > 1000) {
             vTaskDelay(pdMS_TO_TICKS((TickType_t)(remainingUs / 1000)));
         } else {
-            taskYIELD(); // Always yield to Core 0 Wi-Fi/MQTT stack even at max FPS
+            taskYIELD();
         }
 
         if ((++frameCount % 50) == 0) {
@@ -109,7 +107,7 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
 
     s_isStreamingActive = false;
     LOG_NET("CAM: Client disconnected from /stream");
-    httpd_resp_send_chunk(req, nullptr, 0); // Terminate multipart cleanly
+    httpd_resp_send_chunk(req, nullptr, 0);
     return ESP_OK;
 }
 
