@@ -1,25 +1,32 @@
 #pragma once
 #include <Arduino.h>
-#include "cam_config.h" // CAM_STREAM_PORT (single source of truth for tunables)
+#include <ArduinoJson.h>
+#include <esp_camera.h>
+#include "cam_config.h"
 
-// ── V2 Hexapod — CameraServer (P2 MJPEG stream) ─────────────────────────────
-// Wraps the esp32-camera driver + esp_http_server to serve a browser-native
-// MJPEG stream at http://<ip>:81/stream (multipart/x-mixed-replace).
-// The whole subsystem is started from a FreeRTOS task pinned to core 0 so the
-// 100 Hz control loop (core 1) + MQTT watchdog are never starved by capture.
-// Frames are only captured while a browser is connected → idle CAM costs ~0.
 class CameraServer {
 public:
-    // Initialize camera + start HTTP server. Returns false on init failure.
     bool begin(uint16_t port = CAM_STREAM_PORT);
     bool isRunning() const { return m_running; }
 
+    // Dynamic Sensor & Hardware Customization
+    bool applyCameraConfig(const JsonDocument& doc);
+    void setFlashlight(uint8_t brightnessPercent);
+    void setTargetFps(uint8_t fps);
+
+    uint8_t getTargetFps() const { return m_targetFps; }
+    uint8_t getFlashlight() const { return m_lampBrightness; }
+    sensor_t* getSensor() const { return esp_camera_sensor_get(); }
+
 private:
     bool initCamera();
+    bool initFlashlight();
     bool startServer(uint16_t port);
 
     bool m_running = false;
-    void* m_server = nullptr; // httpd_handle_t (kept opaque to keep header light)
+    void* m_server = nullptr;
+    uint8_t m_targetFps = CAM_TARGET_FPS;
+    uint8_t m_lampBrightness = 0;
 };
 
 extern CameraServer cameraServer;

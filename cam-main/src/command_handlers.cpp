@@ -5,7 +5,8 @@
 void registerAllCommandHandlers(
     CommandDispatcher& dispatcher,
     OTAManager& otaMgr,
-    MQTTManager& mqttMgr
+    MQTTManager& mqttMgr,
+    CameraServer& camServer
 ) {
     // 1. System Logging & Config Handshake
     dispatcher.registerHandler(CMD_TYPE_SYSTEM, [&mqttMgr](const JsonDocument& doc) {
@@ -22,7 +23,13 @@ void registerAllCommandHandlers(
         }
     });
 
-    // 2. OTA Firmware Update Handler
+    // 2. Camera Configuration Handler for Multimodal AI Agent
+    dispatcher.registerHandler(CMD_TYPE_CAMERA, [&camServer](const JsonDocument& doc) {
+        LOG_NET("CAM: Remote camera configuration received via MQTT.");
+        camServer.applyCameraConfig(doc);
+    });
+
+    // 3. OTA Firmware Update Handler
     dispatcher.registerHandler(CMD_TYPE_OTA, [&otaMgr](const JsonDocument& doc) {
         bool forceFallback = doc["fallback"]     | false;
         bool forcePrimary  = doc["primary"]      | false;

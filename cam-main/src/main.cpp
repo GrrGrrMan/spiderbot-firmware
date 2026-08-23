@@ -26,8 +26,8 @@ void setup() {
 
     otaManager.begin();
 
-    // Register only System & OTA handlers
-    registerAllCommandHandlers(cmdDispatcher, otaManager, mqttManager);
+    // Pass cameraServer into command handlers for remote agent tuning
+    registerAllCommandHandlers(cmdDispatcher, otaManager, mqttManager, cameraServer);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
         cmdDispatcher.dispatch(type, doc);
@@ -80,7 +80,7 @@ void TaskNetwork(void *pvParameters) {
                     mqttManager.sendLog(entry.message);
                 }
 
-                // Publish telemetry with MJPEG endpoint
+                // Publish telemetry with camera status and MJPEG endpoint
                 JsonDocument telemetry;
                 telemetry["uptime"]     = millis() / 1000;
                 telemetry["free_heap"]  = ESP.getFreeHeap();
@@ -88,6 +88,8 @@ void TaskNetwork(void *pvParameters) {
                 telemetry["ip"]         = netManager.getLocalIP();
                 telemetry["hotspot"]    = netManager.isHotspot();
                 telemetry["stream_url"] = "http://" + netManager.getLocalIP() + ":" + String(CAM_STREAM_PORT) + "/stream";
+                telemetry["flash_pct"]  = cameraServer.getFlashlight();
+                telemetry["target_fps"] = cameraServer.getTargetFps();
                 mqttManager.sendTelemetry(telemetry);
             }
         }

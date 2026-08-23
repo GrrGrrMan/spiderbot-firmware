@@ -18,11 +18,30 @@ static const char* CAM_STREAM_BOUNDARY = "\r\n--" CAM_PART_BOUNDARY "\r\n";
 static const char* CAM_STREAM_PART_HEADER =
     "Content-Type: image/jpeg\r\nContent-Length: %zu\r\n\r\n";
 
-// Concurrency Guard: Ensure only one client stream pulls from DMA at a time
 static bool s_isStreamingActive = false;
 
+static framesize_t parseFramesize(const char* name) {
+    if (!name) return FRAMESIZE_VGA;
+    if (strcasecmp(name, "96X96") == 0)   return FRAMESIZE_96X96;
+    if (strcasecmp(name, "QQVGA") == 0)   return FRAMESIZE_QQVGA;
+    if (strcasecmp(name, "QCIF") == 0)    return FRAMESIZE_QCIF;
+    if (strcasecmp(name, "HQVGA") == 0)   return FRAMESIZE_HQVGA;
+    if (strcasecmp(name, "240X240") == 0) return FRAMESIZE_240X240;
+    if (strcasecmp(name, "QVGA") == 0)    return FRAMESIZE_QVGA;
+    if (strcasecmp(name, "CIF") == 0)     return FRAMESIZE_CIF;
+    if (strcasecmp(name, "HVGA") == 0)    return FRAMESIZE_HVGA;
+    if (strcasecmp(name, "VGA") == 0)     return FRAMESIZE_VGA;
+    if (strcasecmp(name, "SVGA") == 0)    return FRAMESIZE_SVGA;
+    if (strcasecmp(name, "XGA") == 0)     return FRAMESIZE_XGA;
+    if (strcasecmp(name, "HD") == 0)      return FRAMESIZE_HD;
+    if (strcasecmp(name, "SXGA") == 0)    return FRAMESIZE_SXGA;
+    if (strcasecmp(name, "UXGA") == 0)    return FRAMESIZE_UXGA;
+    if (strcasecmp(name, "FHD") == 0)     return FRAMESIZE_FHD;   // OV3660 Native 1080p
+    if (strcasecmp(name, "QXGA") == 0)    return FRAMESIZE_QXGA;  // OV3660 Max (2048x1536)
+    return FRAMESIZE_VGA;
+}
+
 static esp_err_t handleStreamRequest(httpd_req_t* req) {
-    // Always set CORS headers first so browser doesn't block errors
     httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
 
     if (s_isStreamingActive) {
@@ -33,24 +52,19 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
     }
     s_isStreamingActive = true;
 
-    // Set stream headers
     esp_err_t res = httpd_resp_set_type(req, CAM_STREAM_CONTENT_TYPE);
-    if (res == ESP_OK) {
-        res = httpd_resp_set_hdr(req, "X-Framerate", String(CAM_TARGET_FPS).c_str());
-    }
-
     if (res != ESP_OK) {
         s_isStreamingActive = false;
         return res;
     }
 
-    const int64_t framePeriodUs = (int64_t)(1000000.0f / (float)CAM_TARGET_FPS);
     uint32_t frameCount = 0;
-
     LOG_NET("CAM: Client connected to /stream");
 
     while (res == ESP_OK) {
         const int64_t frameStartUs = esp_timer_get_time();
+        const uint8_t curFps = cameraServer.getTargetFps();
+        const int64_t framePeriodUs = (int64_t)(1000000.0f / (float)max((uint8_t)1, curFps));
 
         camera_fb_t* fb = esp_camera_fb_get();
         if (!fb) {
@@ -99,9 +113,9 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
         }
 
         if ((++frameCount % 50) == 0) {
-            const uint32_t fps = (uint32_t)((elapsedUs > 0) ? (1000000UL / (uint32_t)elapsedUs) : CAM_TARGET_FPS);
+            const uint32_t actualFps = (uint32_t)((elapsedUs > 0) ? (1000000UL / (uint32_t)elapsedUs) : curFps);
             LOG_NET("MJPG: %uKB/frame, ~%ufps (Free heap: %u)",
-                    (uint32_t)(jpgBufLen / 1024), fps, (uint32_t)ESP.getFreeHeap());
+                    (uint32_t)(jpgBufLen / 1024), actualFps, (uint32_t)ESP.getFreeHeap());
         }
     }
 
@@ -111,7 +125,105 @@ static esp_err_t handleStreamRequest(httpd_req_t* req) {
     return ESP_OK;
 }
 
-// ── Camera Initialization ────────────────────────────────────────────────────
+bool CameraServer::initFlashlight() {
+    ledcSetup(CAM_LAMP_CHANNEL, 5000, 8); // 5 kHz PWM, 8-bit resolution (0-255)
+    ledcAttachPin(CAM_PIN_LAMP, CAM_LAMP_CHANNEL);
+    setFlashlight(0); // Start OFF
+    return true;
+}
+
+void CameraServer::setFlashlight(uint8_t brightnessPercent) {
+    m_lampBrightness = constrain(brightnessPercent, (uint8_t)0, (uint8_t)100);
+    uint32_t duty = (uint32_t)((m_lampBrightness * 255) / 100);
+    ledcWrite(CAM_LAMP_CHANNEL, duty);
+    LOG_SYS("CAM: Flashlight -> %u%%", m_lampBrightness);
+}
+
+void CameraServer::setTargetFps(uint8_t fps) {
+    m_targetFps = constrain(fps, (uint8_t)1, (uint8_t)30);
+    LOG_NET("CAM: Stream Target FPS -> %u", m_targetFps);
+}
+
+bool CameraServer::applyCameraConfig(const JsonDocument& doc) {
+    sensor_t* s = esp_camera_sensor_get();
+    if (!s) {
+        LOG_ERR("CAM: Cannot adjust sensor — camera driver not initialized.");
+        return false;
+    }
+
+    // 1. Hardware Flashlight (0–100%)
+    if (doc["flash"].is<int>())        setFlashlight(doc["flash"].as<int>());
+    else if (doc["lamp"].is<int>())    setFlashlight(doc["lamp"].as<int>());
+    else if (doc["led"].is<int>())     setFlashlight(doc["led"].as<int>());
+
+    // 2. Stream Target Framerate (1–30 FPS)
+    if (doc["fps"].is<int>())          setTargetFps(doc["fps"].as<int>());
+    else if (doc["target_fps"].is<int>()) setTargetFps(doc["target_fps"].as<int>());
+
+    // 3. Resolution / Framesize
+    if (doc["framesize"].is<const char*>()) {
+        framesize_t fs = parseFramesize(doc["framesize"].as<const char*>());
+        s->set_framesize(s, fs);
+        LOG_NET("CAM: Framesize -> %s (%d)", doc["framesize"].as<const char*>(), (int)fs);
+    } else if (doc["framesize"].is<int>()) {
+        s->set_framesize(s, (framesize_t)doc["framesize"].as<int>());
+        LOG_NET("CAM: Framesize enum -> %d", doc["framesize"].as<int>());
+    }
+
+    // 4. JPEG Quality (0 - 63, lower is higher quality)
+    if (doc["quality"].is<int>()) {
+        int q = constrain(doc["quality"].as<int>(), 0, 63);
+        s->set_quality(s, q);
+        LOG_NET("CAM: Quality -> %d", q);
+    }
+
+    // 5. Brightness, Contrast, Saturation (-2 to 2)
+    if (doc["brightness"].is<int>()) s->set_brightness(s, constrain(doc["brightness"].as<int>(), -2, 2));
+    if (doc["contrast"].is<int>())   s->set_contrast(s, constrain(doc["contrast"].as<int>(), -2, 2));
+    if (doc["saturation"].is<int>()) s->set_saturation(s, constrain(doc["saturation"].as<int>(), -2, 2));
+
+    // 6. Exposure (AEC) & Gain (AGC)
+    if (doc["exposure_ctrl"].is<bool>()) s->set_exposure_ctrl(s, doc["exposure_ctrl"].as<bool>() ? 1 : 0);
+    if (doc["ae_level"].is<int>())      s->set_ae_level(s, constrain(doc["ae_level"].as<int>(), -2, 2));
+    if (doc["aec_value"].is<int>())     s->set_aec_value(s, constrain(doc["aec_value"].as<int>(), 0, 1200));
+    if (doc["aec2"].is<bool>())         s->set_aec2(s, doc["aec2"].as<bool>() ? 1 : 0);
+
+    if (doc["gain_ctrl"].is<bool>())    s->set_gain_ctrl(s, doc["gain_ctrl"].as<bool>() ? 1 : 0);
+    if (doc["agc_gain"].is<int>())      s->set_agc_gain(s, constrain(doc["agc_gain"].as<int>(), 0, 30));
+    if (doc["gainceiling"].is<int>())   s->set_gainceiling(s, (gainceiling_t)constrain(doc["gainceiling"].as<int>(), 0, 6));
+
+    // 7. White Balance (AWB)
+    if (doc["whitebal"].is<bool>())     s->set_whitebal(s, doc["whitebal"].as<bool>() ? 1 : 0);
+    if (doc["awb_gain"].is<bool>())     s->set_awb_gain(s, doc["awb_gain"].as<bool>() ? 1 : 0);
+    if (doc["wb_mode"].is<int>())       s->set_wb_mode(s, constrain(doc["wb_mode"].as<int>(), 0, 4));
+
+    // 8. Special Effects (0: None, 1: Negative, 2: Grayscale, 6: Sepia)
+    if (doc["special_effect"].is<int>()) {
+        s->set_special_effect(s, constrain(doc["special_effect"].as<int>(), 0, 6));
+    }
+
+    // 9. Orientation & Lens Correction
+    if (doc["vflip"].is<bool>())        s->set_vflip(s, doc["vflip"].as<bool>() ? 1 : 0);
+    if (doc["hmirror"].is<bool>())      s->set_hmirror(s, doc["hmirror"].as<bool>() ? 1 : 0);
+    if (doc["lenc"].is<bool>())         s->set_lenc(s, doc["lenc"].as<bool>() ? 1 : 0);
+    if (doc["bpc"].is<bool>())          s->set_bpc(s, doc["bpc"].as<bool>() ? 1 : 0);
+    if (doc["wpc"].is<bool>())          s->set_wpc(s, doc["wpc"].as<bool>() ? 1 : 0);
+    if (doc["raw_gma"].is<bool>())      s->set_raw_gma(s, doc["raw_gma"].as<bool>() ? 1 : 0);
+
+    // 10. Sensor Windowing / Digital Zoom ([startX, startY, width, height])
+    if (doc["crop"].is<JsonArrayConst>() && doc["crop"].as<JsonArrayConst>().size() == 4) {
+        JsonArrayConst c = doc["crop"].as<JsonArrayConst>();
+        int startX = c[0] | 0;
+        int startY = c[1] | 0;
+        int w = c[2] | 640;
+        int h = c[3] | 480;
+        s->set_res_raw(s, 0, 0, 0, 0, startX, startY, w, h, w, h, false, false);
+        LOG_NET("CAM: Sensor window crop set to [%d, %d, %dx%d]", startX, startY, w, h);
+    }
+
+    return true;
+}
+
 bool CameraServer::initCamera() {
     camera_config_t cfg = {};
     cfg.ledc_channel   = (ledc_channel_t)CAM_LEDC_CHANNEL;
@@ -135,9 +247,9 @@ bool CameraServer::initCamera() {
     cfg.xclk_freq_hz   = CAM_XCLK_HZ;
     cfg.pixel_format   = PIXFORMAT_JPEG;
     cfg.frame_size     = CAM_FRAME_SIZE;
-    cfg.jpeg_quality   = CAM_JPEG_QUALITY; // 10-12 recommended for OV2640
-    cfg.fb_count       = 2;                // Double buffering for smooth capture
-    cfg.grab_mode      = CAMERA_GRAB_LATEST; // CRITICAL: Always return real-time frame
+    cfg.jpeg_quality   = CAM_JPEG_QUALITY;
+    cfg.fb_count       = CAM_FB_COUNT;
+    cfg.grab_mode      = CAM_GRAB_MODE;
     cfg.fb_location    = psramFound() ? CAMERA_FB_IN_PSRAM : CAMERA_FB_IN_DRAM;
 
     esp_err_t err = esp_camera_init(&cfg);
@@ -150,23 +262,22 @@ bool CameraServer::initCamera() {
     if (s) {
         s->set_framesize(s, CAM_FRAME_SIZE);
         s->set_quality(s, CAM_JPEG_QUALITY);
-        // Optional camera orientation adjust if mounted upside down:
-        // s->set_vflip(s, 1);
-        // s->set_hmirror(s, 1);
+
+        // ── Set default inverted orientation ──
+        s->set_vflip(s, CAM_DEFAULT_VFLIP);       // Vertical inversion
+        s->set_hmirror(s, CAM_DEFAULT_HMIRROR);   // Horizontal inversion
     }
 
-    LOG_NET("CAM ready (PSRAM=%s, fb_count=2, GRAB_LATEST)", psramFound() ? "yes" : "no");
+    initFlashlight();
+    LOG_NET("CAM ready (OV3660, Inverted=%d/%d)", CAM_DEFAULT_VFLIP, CAM_DEFAULT_HMIRROR);
     return true;
 }
 
-// ── HTTP Server Setup ────────────────────────────────────────────────────────
 bool CameraServer::startServer(uint16_t port) {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.server_port      = port;
     cfg.max_open_sockets = 2;
     cfg.stack_size       = 8192;
-    
-    // RUN ON CORE 1: Prevents frame capture from starving Wi-Fi/MQTT on Core 0
     cfg.core_id          = 1; 
 
     httpd_handle_t server = nullptr;
