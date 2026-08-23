@@ -3,7 +3,7 @@
 #include <Arduino.h>
 
 // ── Motion Watchdog & Safety Timeouts ───────────────────────────────────────
-#define MOTION_WATCHDOG_TIMEOUT_MS   3000   // Stage 1: Auto-brake gait velocity to 0 after 3.0s
+#define MOTION_WATCHDOG_TIMEOUT_MS   30000   // Stage 1: Auto-brake gait velocity to 0 after 30.0s
 #define INACTIVITY_SLEEP_TIMEOUT_MS 15000   // Stage 2: Pull OE HIGH (LIMP sleep) after 15s of total inactivity
 #define MAX_CONTINUOUS_MOTION_MS        0   // 0 = Disabled (safety against packet drop is handled by MOTION_WATCHDOG_TIMEOUT_MS)
 

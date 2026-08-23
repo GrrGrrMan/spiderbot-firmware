@@ -58,6 +58,7 @@ struct AudioCommand {
 static QueueHandle_t     g_audioQueue       = nullptr;
 static RingbufHandle_t   g_pcmRingBuffer    = nullptr;
 static volatile bool     g_audioDonePending = false;
+volatile bool g_watchdogBraked = false;
 static char              g_audioIdleAction[16] = {0};
 
 void TaskNetwork(void *pvParameters);
@@ -115,6 +116,7 @@ void setup() {
         
         if (type == "motion" || type == "keyframe" || type == "pose" || type == "sequence" || type == "preset") {
             g_lastMotionCmdTime = now;
+            g_watchdogBraked = false; // Reset flag when user sends a new command
         }
         cmdDispatcher.dispatch(type, doc);
     });
@@ -234,7 +236,8 @@ void TaskNetwork(void *pvParameters) {
                 telemetry["ip"]        = netManager.getLocalIP();
                 telemetry["hotspot"]   = netManager.isHotspot();
                 telemetry["power"]     = servoManager.isOutputsEnabled();
-                telemetry["audio"]     = isAudioBusy() ? "playing" : "idle";
+                telemetry["audio"]           = isAudioBusy() ? "playing" : "idle";
+                telemetry["watchdog_braked"] = g_watchdogBraked; // Add this line
                 
                 mqttManager.sendTelemetry(telemetry);
             }
@@ -285,11 +288,12 @@ void TaskControl(void *pvParameters) {
                 g_lastMotionCmdTime = 0;
                 LOG_ERR("Safety Cap: Continuous motion exceeded %ums -> Holding stance.", MAX_CONTINUOUS_MOTION_MS);
             }
-            else if (now - g_lastMotionCmdTime > MOTION_WATCHDOG_TIMEOUT_MS) {
+            else if (MOTION_WATCHDOG_TIMEOUT_MS > 0 && (now - g_lastMotionCmdTime > MOTION_WATCHDOG_TIMEOUT_MS)) {
                 VelocityCommand stopCmd = {0.0f, 0.0f, 0.0f, 25.0f, 1.0f, 0.0f, 0.0f};
                 motionController.setVelocity(stopCmd);
                 activeMotionStartMs = 0;
                 g_lastMotionCmdTime = 0;
+                g_watchdogBraked = true; // Tell the UI we hit the brakes!
                 LOG_MOT("Motion Watchdog: Velocity timed out -> holding stance.");
             }
         } else {
