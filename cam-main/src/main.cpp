@@ -72,6 +72,12 @@ void TaskNetwork(void *pvParameters) {
                     s_bootValidated = true;
                     otaManager.validateBootImage();
                     mqttManager.sendConfig();
+
+                    // ── Cheerful Startup Chime (Boot Confirmation Beep) ──
+                    AudioCommand bootBeep{};
+                    bootBeep.type = AudioCommandType::ALARM;
+                    strncpy(bootBeep.alarmName, "curious", sizeof(bootBeep.alarmName) - 1);
+                    if (g_audioQueue) xQueueSend(g_audioQueue, &bootBeep, 0);
                 }
 
                 // Drain 1 log entry per network cycle

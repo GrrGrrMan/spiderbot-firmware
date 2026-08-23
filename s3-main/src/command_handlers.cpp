@@ -14,20 +14,20 @@ void registerAllCommandHandlers(
     });
 
     dispatcher.registerHandler(CMD_TYPE_SERVO, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
-        motionCtrl.setRawServoMode(true);
+        servoMgr.setOutputsEnabled(true);
         uint8_t ch = doc["channel"] | 0;
         uint16_t rawPulse = doc["pulse_us"] | 1500;
-        servoMgr.setServoPulseUs(ch, rawPulse);
+        motionCtrl.setDirectServoPulse(ch, rawPulse);
         LOG_MOT("Direct Servo Write: Ch %d -> %d us", ch, rawPulse);
     });
 
     dispatcher.registerHandler(CMD_TYPE_SERVO_BATCH, [&servoMgr, &motionCtrl](const JsonDocument& doc) {
-        motionCtrl.setRawServoMode(true);
+        servoMgr.setOutputsEnabled(true);
         JsonArrayConst servos = doc["servos"].as<JsonArrayConst>();
         for (JsonObjectConst s : servos) {
             uint8_t ch = s["ch"] | 0;
             uint16_t rawPulse = s["pulse_us"] | 1500;
-            servoMgr.setServoPulseUs(ch, rawPulse);
+            motionCtrl.setDirectServoPulse(ch, rawPulse);
         }
         LOG_MOT("Executed servo_batch write (%d channels)", servos.size());
     });
@@ -105,16 +105,16 @@ void registerAllCommandHandlers(
         float rawTx = getF(doc, "tx", "pos_x", "posX", "surge", 0.0f);
         float rawTy = getF(doc, "ty", "pos_y", "posY", "sway", 0.0f);
         float rawTz = getF(doc, "tz", "pos_z", "posZ", "heave", 0.0f);
-        float rawRx = getF(doc, "rx", "pitch", "Pitch", nullptr, 0.0f);
-        float rawRy = getF(doc, "ry", "roll",  "Roll",  nullptr, 0.0f);
-        float rawRz = getF(doc, "rz", "yaw",   "Yaw",   nullptr, 0.0f);
+        float rawRx = getF(doc, "rx", "roll",  "Roll",  nullptr, 0.0f); // rx = Roll (Rotation about X)
+        float rawRy = getF(doc, "ry", "pitch", "Pitch", nullptr, 0.0f); // ry = Pitch (Rotation about Y)
+        float rawRz = getF(doc, "rz", "yaw",   "Yaw",   nullptr, 0.0f); // rz = Yaw (Rotation about Z)
 
         BodyPose pose;
         pose.posX  =  rawTx;
         pose.posY  =  rawTy;
         pose.posZ  =  rawTz;
-        pose.pitch = -rawRx;
-        pose.roll  = -rawRy;
+        pose.roll  = -rawRx;
+        pose.pitch = -rawRy;
         pose.yaw   = -rawRz;
         
         motionCtrl.setBodyPose(pose);

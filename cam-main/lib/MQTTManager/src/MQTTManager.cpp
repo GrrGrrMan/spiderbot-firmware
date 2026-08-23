@@ -127,7 +127,7 @@ bool MQTTManager::sendTelemetry(const JsonDocument& doc) {
     if (!m_mqttClient.connected()) return false;
 
     unsigned long now = millis();
-    if (now - m_lastTelemetryMs < 500) {
+    if (now - m_lastTelemetryMs < 100) {
         return false;
     }
 

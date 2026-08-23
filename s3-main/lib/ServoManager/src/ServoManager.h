@@ -1,5 +1,7 @@
 #pragma once
 #include <Arduino.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 
 class ServoManager {
 public:
@@ -20,6 +22,7 @@ private:
     uint8_t m_boardAddresses[2];
     bool m_boardActive[2]; // Tracks if hardware actually responded
     bool m_outputsEnabled; 
+    SemaphoreHandle_t m_i2cMutex;
     
     bool initBoard(uint8_t boardIndex);
     bool writeRegister(uint8_t boardAddr, uint8_t reg, uint8_t value);

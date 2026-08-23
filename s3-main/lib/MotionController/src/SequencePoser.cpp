@@ -43,9 +43,9 @@ bool SequencePoser::loadSequence(JsonArrayConst kfArray, uint32_t totalDurationO
         kf.body.posX  = kfObj["tx"] | 0.0f;
         kf.body.posY  = kfObj["ty"] | 0.0f;
         kf.body.posZ  = kfObj["tz"] | 0.0f;
-        kf.body.pitch = -(kfObj["rx"] | 0.0f);
-        kf.body.roll  = -(kfObj["ry"] | 0.0f);
-        kf.body.yaw   = -(kfObj["rz"] | 0.0f);
+        kf.body.roll  = -(kfObj["rx"] | (kfObj["roll"]  | 0.0f));
+        kf.body.pitch = -(kfObj["ry"] | (kfObj["pitch"] | 0.0f));
+        kf.body.yaw   = -(kfObj["rz"] | (kfObj["yaw"]   | 0.0f));
 
         for (int l = 0; l < LEG_COUNT; l++) {
             kf.overrideJoints[l] = false;

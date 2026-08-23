@@ -3,9 +3,9 @@
 #include "logger.h"
 #include "motion_config.h"
 
-const bool LEG_COXA_INVERT[LEG_COUNT]  = { true, true, true, true, true, true }; 
+const bool LEG_COXA_INVERT[LEG_COUNT]  = { false, false, false, false, false, false }; 
 const bool LEG_FEMUR_INVERT[LEG_COUNT] = { true, true, true, true, true, true };
-const bool LEG_TIBIA_INVERT[LEG_COUNT] = { true, true, true, true, true, true };
+const bool LEG_TIBIA_INVERT[LEG_COUNT] = { false, false, false, false, false, false };
 
 MotionController::MotionController(ServoManager& servoMgr) 
     : m_servoMgr(servoMgr),
@@ -100,12 +100,42 @@ void MotionController::setGaitType(GaitType type) {
     }
 }
 
+void MotionController::resetSoftStart() {
+    m_softStartElapsed = 0.0f;
+}
+
+void MotionController::setDirectServoPulse(uint8_t globalChannel, uint16_t pulseUs) {
+    if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        m_isRawMode = true;
+        m_sequencePoser.stop();
+        float angleDeg = (pulseUs - 1500.0f) / US_PER_DEGREE;
+        
+        for (uint8_t leg = 0; leg < LEG_COUNT; leg++) {
+            if (LEG_COXA_CHANNELS[leg] == globalChannel) {
+                if (LEG_COXA_INVERT[leg]) angleDeg = -angleDeg;
+                m_rawTargetAngles[leg].alpha = angleDeg;
+                m_rawCurrentAngles[leg].alpha = angleDeg;
+            } else if (LEG_FEMUR_CHANNELS[leg] == globalChannel) {
+                if (LEG_FEMUR_INVERT[leg]) angleDeg = -angleDeg;
+                m_rawTargetAngles[leg].beta = angleDeg;
+                m_rawCurrentAngles[leg].beta = angleDeg;
+            } else if (LEG_TIBIA_CHANNELS[leg] == globalChannel) {
+                if (LEG_TIBIA_INVERT[leg]) angleDeg = -angleDeg;
+                m_rawTargetAngles[leg].gamma = angleDeg;
+                m_rawCurrentAngles[leg].gamma = angleDeg;
+            }
+        }
+        m_servoMgr.setServoPulseUs(globalChannel, pulseUs);
+        xSemaphoreGive(m_mutex);
+    }
+}
+
 void MotionController::setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma) {
     if (leg >= LEG_COUNT) return;
     if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         m_rawTargetAngles[leg].alpha = constrain(alpha, COXA_MIN_DEG,  COXA_MAX_DEG);
         m_rawTargetAngles[leg].beta  = constrain(beta,  FEMUR_MIN_DEG, FEMUR_MAX_DEG);
-        m_rawTargetAngles[leg].gamma = constrain(-gamma, TIBIA_MIN_DEG, TIBIA_MAX_DEG);
+        m_rawTargetAngles[leg].gamma = constrain(gamma, TIBIA_MIN_DEG, TIBIA_MAX_DEG); // Fixed: was -gamma
         xSemaphoreGive(m_mutex);
     }
 }
@@ -188,7 +218,7 @@ void MotionController::update(float dtSeconds) {
             } else if (joints.leg[leg].isValid) {
                 desiredAngles[leg].alpha = joints.leg[leg].coxaDeg;
                 desiredAngles[leg].beta  = -joints.leg[leg].femurDeg;
-                desiredAngles[leg].gamma = joints.leg[leg].tibiaDeg;
+                desiredAngles[leg].gamma = -joints.leg[leg].tibiaDeg;
             } else {
                 desiredAngles[leg] = m_rawCurrentAngles[leg];
             }
@@ -225,7 +255,7 @@ void MotionController::update(float dtSeconds) {
             if (joints.leg[leg].isValid) {
                 desiredAngles[leg].alpha = joints.leg[leg].coxaDeg;
                 desiredAngles[leg].beta  = -joints.leg[leg].femurDeg;
-                desiredAngles[leg].gamma = joints.leg[leg].tibiaDeg;
+                desiredAngles[leg].gamma = -joints.leg[leg].tibiaDeg;
             } else {
                 desiredAngles[leg] = m_rawCurrentAngles[leg];
             }
@@ -240,7 +270,7 @@ void MotionController::update(float dtSeconds) {
 
         m_appliedAngles[leg].alpha = m_rawCurrentAngles[leg].alpha;
         m_appliedAngles[leg].beta  = m_rawCurrentAngles[leg].beta;
-        m_appliedAngles[leg].gamma = -m_rawCurrentAngles[leg].gamma;
+        m_appliedAngles[leg].gamma = m_rawCurrentAngles[leg].gamma;
 
         uint16_t coxaWidthTicks  = degreesToTick(m_rawCurrentAngles[leg].alpha, LEG_COXA_INVERT[leg],  COXA_NEUTRAL_DEG);
         uint16_t femurWidthTicks = degreesToTick(m_rawCurrentAngles[leg].beta,  LEG_FEMUR_INVERT[leg], FEMUR_NEUTRAL_DEG);

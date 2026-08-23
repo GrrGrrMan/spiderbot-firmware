@@ -8,13 +8,13 @@
 #define PIN_PCA_SCL 42
 #define PIN_PCA_OE  13
 
-const uint8_t LEG_COXA_CHANNELS[6]  = { 24, 20, 16,  8,  4,  0 }; // RF, RM, RB, LB, LM, LF
-const uint8_t LEG_FEMUR_CHANNELS[6] = { 25, 21, 17,  9,  5,  1 };
-const uint8_t LEG_TIBIA_CHANNELS[6] = { 26, 22, 18, 10,  6,  2 };
+const uint8_t LEG_COXA_CHANNELS[6]  = {  0,  4,  8, 16, 20, 24 }; // RF, RM, RB, LB, LM, LF
+const uint8_t LEG_FEMUR_CHANNELS[6] = {  1,  5,  9, 17, 21, 25 };
+const uint8_t LEG_TIBIA_CHANNELS[6] = {  2,  6, 10, 18, 22, 26 };
 
 // Dual PCA9685 I2C Addresses
-#define PCA_ADDR_BOARD_1 0x40 // Default address (LEFT side)
-#define PCA_ADDR_BOARD_2 0x41 // A0 jumper bridged (RIGHT side)
+#define PCA_ADDR_BOARD_1 0x40 // Default address (RIGHT side, PCA 0)
+#define PCA_ADDR_BOARD_2 0x41 // A0 jumper bridged (LEFT side, PCA 1)
 #define PCA_NUM_BOARDS 2
 
 // PCA9685 Registers

@@ -72,11 +72,12 @@ void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosit
         }
 
         // Dynamic walking strides (only computed when actively moving)
-        float strideX = cmd.vx * (cmd.cycleTime * stanceRatio);
-        float strideY = cmd.vy * (cmd.cycleTime * stanceRatio);
+        // Scaled by 0.5 because full ground displacement is 2 * stride during stance phase
+        float strideX = (cmd.vx * (cmd.cycleTime * stanceRatio)) * 0.5f;
+        float strideY = (cmd.vy * (cmd.cycleTime * stanceRatio)) * 0.5f;
 
         if (fabsf(cmd.omega) > 0.1f) {
-            float yawRad = (cmd.omega * (M_PI / 180.0f)) * (cmd.cycleTime * stanceRatio);
+            float yawRad = ((cmd.omega * (M_PI / 180.0f)) * (cmd.cycleTime * stanceRatio)) * 0.5f;
             float mRad = MOUNT_ANGLES[i] * (M_PI / 180.0f);
             
             float hipX = (i == 0 || i == 5) ? BODY_LENGTH_MM/2.0f : ((i == 2 || i == 3) ? -BODY_LENGTH_MM/2.0f : 0.0f);

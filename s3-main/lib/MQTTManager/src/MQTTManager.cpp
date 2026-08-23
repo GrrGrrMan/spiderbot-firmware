@@ -31,6 +31,8 @@ void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
     m_audioTopic     = "hexapod/" + m_deviceId + "/audio";
     m_audioStatusTopic = "hexapod/" + m_deviceId + "/audio/status";
 
+    MDNS.begin("hexapod-s3-client"); // Initialized once here
+
     m_mqttClient.setCallback(MQTTManager::onMqttMessage);
     // P5: audio topic carries chunked TTS frames (~4 KB base64 payload).
     // 8 KB comfortably holds one frame + JSON envelope (PubSubClient caps at 64 KB).
@@ -47,9 +49,6 @@ void MQTTManager::setAudioCommandCallback(AudioCommandCallback cb) {
 
 void MQTTManager::reconnect(const char* brokerHost) {
     if (m_mqttClient.connected()) return;
-
-    // Start ESP32's built-in mDNS client (S3 device identity)
-    MDNS.begin("hexapod-s3-client");
 
     // Generate unique Client ID using ESP32 MAC address to prevent public broker disconnect collisions
     String uniqueClientId = m_deviceId + "-" + String((uint32_t)ESP.getEfuseMac(), HEX);
@@ -151,7 +150,7 @@ bool MQTTManager::sendTelemetry(const JsonDocument& doc) {
     if (!m_mqttClient.connected()) return false;
 
     unsigned long now = millis();
-    if (now - m_lastTelemetryMs < 500) {
+    if (now - m_lastTelemetryMs < 100) {
         return false;
     }
 

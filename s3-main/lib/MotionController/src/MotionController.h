@@ -26,6 +26,8 @@ public:
     void setVelocity(const VelocityCommand& cmd);
     void setGaitType(GaitType type);
     void setRawServoMode(bool enable);
+    void setDirectServoPulse(uint8_t globalChannel, uint16_t pulseUs);
+    void resetSoftStart();
     void setRawLegAngles(uint8_t leg, float alpha, float beta, float gamma);
     void getRawLegAngles(uint8_t leg, float& alpha, float& beta, float& gamma);
 
