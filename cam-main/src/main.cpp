@@ -48,6 +48,7 @@ void TaskNetwork(void *pvParameters) {
 
     static bool s_bootValidated = false;
     static unsigned long s_lastCamAttemptMs = 0;
+    static unsigned long s_lastTelemetryMs = 0;
 
     for (;;) {
         netManager.update();
@@ -72,12 +73,6 @@ void TaskNetwork(void *pvParameters) {
                     s_bootValidated = true;
                     otaManager.validateBootImage();
                     mqttManager.sendConfig();
-
-                    // ── Cheerful Startup Chime (Boot Confirmation Beep) ──
-                    AudioCommand bootBeep{};
-                    bootBeep.type = AudioCommandType::ALARM;
-                    strncpy(bootBeep.alarmName, "curious", sizeof(bootBeep.alarmName) - 1);
-                    if (g_audioQueue) xQueueSend(g_audioQueue, &bootBeep, 0);
                 }
 
                 // Drain 1 log entry per network cycle
@@ -86,17 +81,22 @@ void TaskNetwork(void *pvParameters) {
                     mqttManager.sendLog(entry.message);
                 }
 
-                // Publish telemetry with camera status and MJPEG endpoint
-                JsonDocument telemetry;
-                telemetry["uptime"]     = millis() / 1000;
-                telemetry["free_heap"]  = ESP.getFreeHeap();
-                telemetry["rssi"]       = WiFi.RSSI();
-                telemetry["ip"]         = netManager.getLocalIP();
-                telemetry["hotspot"]    = netManager.isHotspot();
-                telemetry["stream_url"] = "http://" + netManager.getLocalIP() + ":" + String(CAM_STREAM_PORT) + "/stream";
-                telemetry["flash_pct"]  = cameraServer.getFlashlight();
-                telemetry["target_fps"] = cameraServer.getTargetFps();
-                mqttManager.sendTelemetry(telemetry);
+                // Publish telemetry once per second (1000ms)
+                unsigned long now = millis();
+                if (now - s_lastTelemetryMs >= 1000UL) {
+                    s_lastTelemetryMs = now;
+
+                    JsonDocument telemetry;
+                    telemetry["uptime"]     = now / 1000;
+                    telemetry["free_heap"]  = ESP.getFreeHeap();
+                    telemetry["rssi"]       = WiFi.RSSI();
+                    telemetry["ip"]         = netManager.getLocalIP();
+                    telemetry["hotspot"]    = netManager.isHotspot();
+                    telemetry["stream_url"] = "http://" + netManager.getLocalIP() + ":" + String(CAM_STREAM_PORT) + "/stream";
+                    telemetry["flash_pct"]  = cameraServer.getFlashlight();
+                    telemetry["target_fps"] = cameraServer.getTargetFps();
+                    mqttManager.sendTelemetry(telemetry);
+                }
             }
         }
 

@@ -28,6 +28,8 @@ void MQTTManager::begin(const char* deviceId, uint16_t brokerPort) {
     m_telemetryTopic = "hexapod/" + m_deviceId + "/telemetry";
     m_logTopic       = "hexapod/" + m_deviceId + "/logs";
 
+    MDNS.begin("hexapod-cam-client"); 
+
     m_mqttClient.setCallback(MQTTManager::onMqttMessage);
     m_mqttClient.setBufferSize(1024);
 }
