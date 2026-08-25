@@ -11,7 +11,7 @@ TTSStreamer::FeedResult TTSStreamer::feedBinary(
     const uint8_t* pcmPayload, size_t pcmLength, 
     int16_t** outPcm, size_t* outSamples
 ) {
-    if (pcmLength == 0 || total == 0) return FeedResult::ERROR;
+    if (pcmLength == 0) return FeedResult::ERROR;
 
     if (m_activeFlowId != flowId) {
         resetFlow();
@@ -29,7 +29,8 @@ TTSStreamer::FeedResult TTSStreamer::feedBinary(
         *outPcm = nullptr;
     }
 
-    if (seq + 1 >= m_expectedTotal) {
+    // Only mark FLOW_COMPLETE if total was specified and last frame arrived
+    if (m_expectedTotal > 0 && (seq + 1 >= m_expectedTotal)) {
         return FeedResult::FLOW_COMPLETE;
     }
 

@@ -69,6 +69,13 @@ bool MotionController::isSequenceActive() const {
     return m_sequencePoser.isActive();
 }
 
+bool MotionController::isMoving() const {
+    if (m_sequencePoser.isActive()) return true;
+    if (fabsf(m_velocityCmd.vx) > 0.1f || fabsf(m_velocityCmd.vy) > 0.1f || fabsf(m_velocityCmd.omega) > 0.1f) return true;
+    if (fabsf(m_currentVelocity.vx) > 0.1f || fabsf(m_currentVelocity.vy) > 0.1f || fabsf(m_currentVelocity.omega) > 0.1f) return true;
+    return false;
+}
+
 void MotionController::setRawServoMode(bool enable) {
     if (m_mutex && xSemaphoreTake(m_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
         m_isRawMode = enable;

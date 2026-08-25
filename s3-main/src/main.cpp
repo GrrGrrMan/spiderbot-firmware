@@ -112,7 +112,11 @@ void setup() {
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
         unsigned long now = millis();
-        g_lastActivityTime = now;
+        
+        // Heartbeats must NOT reset the user inactivity (auto-limp) timer
+        if (type != "heartbeat") {
+            g_lastActivityTime = now;
+        }
         
         if (type == "motion" || type == "keyframe" || type == "pose" || type == "sequence" || type == "preset") {
             g_lastMotionCmdTime = now;
@@ -287,7 +291,7 @@ void TaskControl(void *pvParameters) {
 
     for (;;) {
         unsigned long now = millis();
-        bool isMoving = motionController.isSequenceActive();
+        bool isMoving = motionController.isMoving();
         bool audioActive = isAudioBusy();
 
         // Audio or motion keeps the overall system awake (prevents OE limp sleep)
@@ -295,7 +299,7 @@ void TaskControl(void *pvParameters) {
             g_lastActivityTime = now;
         }
 
-        // Only active sequence playback keeps the gait motion timer refreshed
+        // Active locomotion or sequence playback keeps the gait motion timer refreshed
         if (isMoving) {
             g_lastMotionCmdTime = now;
         }

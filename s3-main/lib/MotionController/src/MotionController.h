@@ -20,6 +20,7 @@ public:
     void playSequence(JsonArrayConst keyframes, uint32_t durationOverrideMs = 0);
     void stopSequence();
     bool isSequenceActive() const;
+    bool isMoving() const;
 
     // Standard motion / pose controls
     void setBodyPose(const BodyPose& pose);
