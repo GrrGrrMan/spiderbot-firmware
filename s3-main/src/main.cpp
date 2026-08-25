@@ -124,11 +124,50 @@ void setup() {
     mqttManager.setAudioCommandCallback([](const String& action, JsonDocument& doc) {
         g_lastActivityTime = millis();
 
-        if (action == "tts") {
-            const char* flowId  = doc["flow_id"] | "";
-            uint16_t    seq     = doc["seq"]     | 0;
-            uint16_t    total   = doc["total"]   | 0;
-            const char* payload = doc["payload"] | "";
+        // 1. Master Volume Tuning
+        if (action == "volume" || doc["volume"].is<float>()) {
+            float v = doc["volume"] | audioManager.getVolume();
+            audioManager.setVolume(v);
+            LOG_SYS("AUDIO: Master volume set to %.0f%%", v * 100.0f);
+            return;
+        }
+
+        // 2. Sound Effects & Alarms
+        AudioCommand cmd{};
+        if (action == "beep" || action == "play") {
+            cmd.type = AudioCommandType::TONE;
+            cmd.freqHz = (action == "play") ? 660 : 1200;
+            cmd.ms = 100;
+            mqttManager.sendAudioStatus("playing", action.c_str());
+            if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
+        } else if (action == "alarm") {
+            const char* name = doc["payload"] | "idle";
+            cmd.type = AudioCommandType::ALARM;
+            strncpy(cmd.alarmName, name, sizeof(cmd.alarmName) - 1);
+            mqttManager.sendAudioStatus("playing", "alarm");
+            if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
+        }
+    });
+
+    // ── Ultra-Low Latency Binary Audio Ingestion (Core 0) ──
+    mqttManager.setAudioBinCommandCallback([](const uint8_t* payload, size_t length) {
+        g_lastActivityTime = millis();
+        if (length < 10) return; // Must contain at least the 10-byte header
+        
+        uint8_t action = payload[1];
+
+        // 0x00 = TTS CHUNK
+        if (action == 0x00) {
+            uint32_t flowId;
+            uint16_t seq, total;
+            
+            // Unpack header using memory-safe extraction
+            memcpy(&flowId, payload + 2, 4);
+            memcpy(&seq, payload + 6, 2);
+            memcpy(&total, payload + 8, 2);
+
+            const uint8_t* pcmData = payload + 10;
+            size_t pcmLen = length - 10;
 
             if (seq == 0) {
                 mqttManager.sendAudioStatus("playing", "tts");
@@ -138,11 +177,12 @@ void setup() {
             }
 
             int16_t* pcmChunk = nullptr;
-            size_t   samples  = 0;
+            size_t samples = 0;
 
-            TTSStreamer::FeedResult res = ttsStreamer.feed(flowId, seq, total, payload, &pcmChunk, &samples);
+            TTSStreamer::FeedResult res = ttsStreamer.feedBinary(flowId, seq, total, pcmData, pcmLen, &pcmChunk, &samples);
 
             if (samples > 0 && pcmChunk != nullptr && g_pcmRingBuffer) {
+                // Instantly ship to Core 1 DMA
                 BaseType_t ok = xRingbufferSend(g_pcmRingBuffer, pcmChunk, samples * sizeof(int16_t), pdMS_TO_TICKS(50));
                 if (ok != pdTRUE) {
                     LOG_ERR("AUDIO: RingBuffer full! Frame %u dropped.", seq);
@@ -158,22 +198,6 @@ void setup() {
                 ttsStreamer.resetFlow();
                 mqttManager.sendAudioStatus("error", "tts");
             }
-            return;
-        }
-
-        AudioCommand cmd{};
-        if (action == "beep" || action == "play") {
-            cmd.type = AudioCommandType::TONE;
-            cmd.freqHz = (action == "play") ? 660 : 1200;
-            cmd.ms = 100;
-            mqttManager.sendAudioStatus("playing", action.c_str());
-            if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
-        } else if (action == "alarm") {
-            const char* name = doc["payload"] | "idle";
-            cmd.type = AudioCommandType::ALARM;
-            strncpy(cmd.alarmName, name, sizeof(cmd.alarmName) - 1);
-            mqttManager.sendAudioStatus("playing", "alarm");
-            if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
         }
     });
 
@@ -315,6 +339,7 @@ void TaskAudio(void *pvParameters) {
     AudioCommand cmd;
     bool isStreamingTts = false;
     bool isPrebuffered  = false;
+    unsigned long lastAudioDataMs = 0;
 
     const size_t LOW_LATENCY_PREBUFFER = 2048; // ~46ms ultra-fast startup cushion
 
@@ -340,6 +365,7 @@ void TaskAudio(void *pvParameters) {
                 case AudioCommandType::TTS_START:
                     isStreamingTts = true;
                     isPrebuffered  = false;
+                    lastAudioDataMs = millis();
                     break;
 
                 case AudioCommandType::TTS_END:
@@ -371,8 +397,15 @@ void TaskAudio(void *pvParameters) {
             size_t waitingBytes = 0;
             vRingbufferGetInfo(g_pcmRingBuffer, nullptr, nullptr, nullptr, nullptr, (UBaseType_t*)&waitingBytes);
 
+            if (waitingBytes > 0) {
+                lastAudioDataMs = millis();
+            }
+
             if (!isPrebuffered) {
                 if (waitingBytes >= LOW_LATENCY_PREBUFFER) {
+                    isPrebuffered = true;
+                } else if (millis() - lastAudioDataMs > 1500) {
+                    // Prebuffer timeout for very short utterances
                     isPrebuffered = true;
                 } else {
                     vTaskDelay(pdMS_TO_TICKS(2));
@@ -385,7 +418,18 @@ void TaskAudio(void *pvParameters) {
             if (item && itemSize > 0) {
                 audioManager.writePcmChunk((const int16_t*)item, itemSize / sizeof(int16_t));
                 vRingbufferReturnItem(g_pcmRingBuffer, item);
+                lastAudioDataMs = millis();
             } else if (waitingBytes == 0) {
+                // Safety guard: if streaming started but no data received for >2.0s, auto-return to idle
+                if (millis() - lastAudioDataMs > 2000) {
+                    audioManager.stop();
+                    ttsStreamer.resetFlow();
+                    isStreamingTts = false;
+                    isPrebuffered  = false;
+                    strncpy(g_audioIdleAction, "tts", sizeof(g_audioIdleAction) - 1);
+                    g_audioDonePending = true;
+                    LOG_SYS("AUDIO TTS stream idle timeout -> reset to idle");
+                }
                 vTaskDelay(pdMS_TO_TICKS(2));
             }
         }

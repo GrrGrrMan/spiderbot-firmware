@@ -8,6 +8,8 @@
 
 typedef void (*CommandCallback)(const String& type, JsonDocument& doc);
 typedef void (*AudioCommandCallback)(const String& action, JsonDocument& doc);
+typedef void (*AudioBinCommandCallback)(const uint8_t* payload, size_t length);
+
 
 class MQTTManager {
 public:
@@ -21,6 +23,7 @@ public:
     bool sendAudioStatus(const char* state, const char* action);
     void setCommandCallback(CommandCallback cb);
     void setAudioCommandCallback(AudioCommandCallback cb);
+    void setAudioBinCommandCallback(AudioBinCommandCallback cb);
     bool isConnected();
 
 private:
@@ -41,6 +44,7 @@ private:
     bool m_isPublishingLog;
     CommandCallback m_cmdCallback;
     AudioCommandCallback m_audioCallback;
+    AudioBinCommandCallback m_audioBinCallback;
 
     void reconnect(const char* brokerHost);
     static void onMqttMessage(char* topic, byte* payload, unsigned int length);

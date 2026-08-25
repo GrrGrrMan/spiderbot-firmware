@@ -151,6 +151,44 @@ bool CameraServer::applyCameraConfig(const JsonDocument& doc) {
         return false;
     }
 
+    // 0. Composite Presets
+    if (doc["preset"].is<const char*>()) {
+        const char* preset = doc["preset"].as<const char*>();
+        if (strcasecmp(preset, "night_vision") == 0 || strcasecmp(preset, "night") == 0) {
+            setFlashlight(80);
+            s->set_exposure_ctrl(s, 1);
+            s->set_gain_ctrl(s, 1);
+            s->set_agc_gain(s, 20);
+            s->set_special_effect(s, 2); // Grayscale
+            setTargetFps(15);
+            LOG_NET("CAM: Preset -> NIGHT_VISION");
+        } else if (strcasecmp(preset, "inspection") == 0 || strcasecmp(preset, "macro") == 0) {
+            setFlashlight(30);
+            s->set_quality(s, 8); // High quality
+            s->set_special_effect(s, 0); // Normal
+            LOG_NET("CAM: Preset -> INSPECTION");
+        } else if (strcasecmp(preset, "stealth") == 0) {
+            setFlashlight(0);
+            s->set_special_effect(s, 0);
+            LOG_NET("CAM: Preset -> STEALTH");
+        } else if (strcasecmp(preset, "low_power") == 0) {
+            setFlashlight(0);
+            setTargetFps(5);
+            s->set_framesize(s, FRAMESIZE_QVGA);
+            LOG_NET("CAM: Preset -> LOW_POWER");
+        } else if (strcasecmp(preset, "default") == 0 || strcasecmp(preset, "reset") == 0) {
+            setFlashlight(0);
+            s->set_framesize(s, CAM_FRAME_SIZE);
+            s->set_quality(s, CAM_JPEG_QUALITY);
+            s->set_special_effect(s, 0);
+            s->set_brightness(s, 0);
+            s->set_contrast(s, 0);
+            s->set_saturation(s, 0);
+            setTargetFps(CAM_TARGET_FPS);
+            LOG_NET("CAM: Preset -> DEFAULT (RESET)");
+        }
+    }
+
     // 1. Hardware Flashlight (0–100%)
     if (doc["flash"].is<int>())        setFlashlight(doc["flash"].as<int>());
     else if (doc["lamp"].is<int>())    setFlashlight(doc["lamp"].as<int>());

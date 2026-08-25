@@ -15,7 +15,8 @@ MQTTManager::MQTTManager()
       m_lastTelemetryMs(0),
       m_isPublishingLog(false),
       m_cmdCallback(nullptr),
-      m_audioCallback(nullptr) {
+      m_audioCallback(nullptr),
+      m_audioBinCallback(nullptr) {
     s_instance = this;
 }
 
@@ -45,6 +46,10 @@ void MQTTManager::setCommandCallback(CommandCallback cb) {
 
 void MQTTManager::setAudioCommandCallback(AudioCommandCallback cb) {
     m_audioCallback = cb;
+}
+
+void MQTTManager::setAudioBinCommandCallback(AudioBinCommandCallback cb) {
+    m_audioBinCallback = cb;
 }
 
 void MQTTManager::reconnect(const char* brokerHost) {
@@ -192,21 +197,32 @@ bool MQTTManager::sendConfig() {
 void MQTTManager::onMqttMessage(char* topic, byte* payload, unsigned int length) {
     if (!s_instance) return;
 
+    if (strcmp(topic, s_instance->m_audioTopic.c_str()) == 0) {
+        // QUICK-ROUTE: If magic byte 0xAA is present, handle natively
+        if (length > 0 && payload[0] == 0xAA) {
+            if (s_instance->m_audioBinCallback) {
+                s_instance->m_audioBinCallback((const uint8_t*)payload, length);
+            }
+            return;
+        }
+
+        // FALLBACK: Web UI still sends {"action": "beep"} as JSON
+        JsonDocument doc;
+        DeserializationError err = deserializeJson(doc, payload, length);
+        if (!err && s_instance->m_audioCallback) {
+            const char* action = doc["action"] | "unknown";
+            LOG_NET("MQTT Received [%s] -> Action: '%s'", topic, action);
+            s_instance->m_audioCallback(String(action), doc);
+        } else if (err) {
+            LOG_ERR("JSON parse failed on topic [%s]: %s", topic, err.c_str());
+        }
+        return;
+    }
+
     JsonDocument doc;
     DeserializationError err = deserializeJson(doc, payload, length);
     if (err) {
         LOG_ERR("JSON parse failed on topic [%s]: %s", topic, err.c_str());
-        return;
-    }
-
-    if (strcmp(topic, s_instance->m_audioTopic.c_str()) == 0) {
-        // Audio topic frames route on "action" (beep/alarm/tts); log it
-        // accurately instead of the misleading doc["type"] == "unknown".
-        const char* action = doc["action"] | "unknown";
-        LOG_NET("MQTT Received [%s] -> Action: '%s'", topic, action);
-        if (s_instance->m_audioCallback) {
-            s_instance->m_audioCallback(String(action), doc);
-        }
         return;
     }
 
