@@ -95,7 +95,7 @@ size_t AudioManager::writePcmChunk(const int16_t* samples, size_t count) {
     m_state = AudioState::PLAYING;
 
 #if AUDIO_SIM_MODE
-    return count * sizeof(int16_t);
+    return count;
 #endif
 
     int16_t stereoBuffer[DMA_CHUNK_SAMPLES * 2];
@@ -127,8 +127,9 @@ size_t AudioManager::writePcmChunk(const int16_t* samples, size_t count) {
             m_state = AudioState::ERROR;
             break;
         }
-        writtenTotal += (bytesWritten / 2);
-        idx += chunk;
+        size_t samplesWritten = bytesWritten / (2 * sizeof(int16_t));
+        writtenTotal += samplesWritten;
+        idx += (samplesWritten > 0) ? samplesWritten : chunk;
     }
     return writtenTotal;
 }
@@ -171,7 +172,7 @@ bool AudioManager::playTone(uint16_t freqHz, uint16_t ms) {
         writePcmChunk(frame, n);
         generated += n;
 
-        taskYIELD();
+        vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     m_state = AudioState::IDLE;

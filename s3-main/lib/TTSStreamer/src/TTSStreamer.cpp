@@ -19,11 +19,13 @@ TTSStreamer::FeedResult TTSStreamer::feedBinary(
         m_expectedTotal = total;
     }
 
-    *outSamples = pcmLength / sizeof(int16_t);
+    size_t maxBytes = sizeof(m_pcmChunkBuffer);
+    size_t copyBytes = (pcmLength > maxBytes) ? maxBytes : pcmLength;
+    *outSamples = copyBytes / sizeof(int16_t);
 
     if (*outSamples > 0) {
-        // Direct memory copy (10x faster than Base64 decode)
-        memcpy(m_pcmChunkBuffer, pcmPayload, pcmLength);
+        // Direct memory copy with bounds protection (prevents overflow)
+        memcpy(m_pcmChunkBuffer, pcmPayload, copyBytes);
         *outPcm = m_pcmChunkBuffer;
     } else {
         *outPcm = nullptr;

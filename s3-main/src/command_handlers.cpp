@@ -72,6 +72,9 @@ void registerAllCommandHandlers(
     });
 
     dispatcher.registerHandler(CMD_TYPE_MOTION, [&motionCtrl, &servoMgr](const JsonDocument& doc) {
+        if (!servoMgr.isOutputsEnabled()) {
+            motionCtrl.resetSoftStart(); // Glide-in prevents motor current spike on wake
+        }
         servoMgr.setOutputsEnabled(true);
         motionCtrl.setRawServoMode(false); 
 

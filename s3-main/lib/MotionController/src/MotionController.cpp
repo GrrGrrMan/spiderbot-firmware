@@ -240,15 +240,9 @@ void MotionController::update(float dtSeconds) {
         m_currentPose.pitch = slewToward(m_currentPose.pitch, m_targetPose.pitch, maxAngDelta);
         m_currentPose.yaw   = slewToward(m_currentPose.yaw,   m_targetPose.yaw,   maxAngDelta);
 
-        if (fabsf(m_velocityCmd.vx) < 0.1f && fabsf(m_velocityCmd.vy) < 0.1f && fabsf(m_velocityCmd.omega) < 0.1f) {
-            m_currentVelocity.vx = 0.0f;
-            m_currentVelocity.vy = 0.0f;
-            m_currentVelocity.omega = 0.0f;
-        } else {
-            m_currentVelocity.vx    = slewToward(m_currentVelocity.vx,    m_velocityCmd.vx,    maxLinDelta);
-            m_currentVelocity.vy    = slewToward(m_currentVelocity.vy,    m_velocityCmd.vy,    maxLinDelta);
-            m_currentVelocity.omega = slewToward(m_currentVelocity.omega, m_velocityCmd.omega, maxAngDelta);
-        }
+        m_currentVelocity.vx    = slewToward(m_currentVelocity.vx,    m_velocityCmd.vx,    maxLinDelta);
+        m_currentVelocity.vy    = slewToward(m_currentVelocity.vy,    m_velocityCmd.vy,    maxLinDelta);
+        m_currentVelocity.omega = slewToward(m_currentVelocity.omega, m_velocityCmd.omega, maxAngDelta);
 
         m_currentVelocity.stepHeight = slewToward(m_currentVelocity.stepHeight, m_velocityCmd.stepHeight, maxLinDelta);
         m_currentVelocity.legStance  = slewToward(m_currentVelocity.legStance,  m_velocityCmd.legStance,  maxLinDelta);
@@ -287,6 +281,9 @@ void MotionController::update(float dtSeconds) {
         m_servoMgr.setServoWidthTicks(LEG_FEMUR_CHANNELS[leg], femurWidthTicks);
         m_servoMgr.setServoWidthTicks(LEG_TIBIA_CHANNELS[leg], tibiaWidthTicks);
     }
+
+    // Flush all 18 servos in 2 bulk PCA9685 I2C burst transactions
+    m_servoMgr.commitServos();
 
     xSemaphoreGive(m_mutex);
 }

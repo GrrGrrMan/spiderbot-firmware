@@ -66,12 +66,7 @@ void TaskControl(void *pvParameters);
 void TaskAudio(void *pvParameters);
 
 static inline bool isAudioBusy() {
-    size_t ringBufBytes = 0;
-    if (g_pcmRingBuffer) {
-        vRingbufferGetInfo(g_pcmRingBuffer, nullptr, nullptr, nullptr, nullptr, &ringBufBytes);
-    }
     return (audioManager.state() == AudioState::PLAYING) || 
-           (ringBufBytes > 0) || 
            ttsStreamer.isActive();
 }
 
@@ -148,6 +143,7 @@ void setup() {
             const char* name = doc["payload"] | "idle";
             cmd.type = AudioCommandType::ALARM;
             strncpy(cmd.alarmName, name, sizeof(cmd.alarmName) - 1);
+            cmd.alarmName[sizeof(cmd.alarmName) - 1] = '\0';
             mqttManager.sendAudioStatus("playing", "alarm");
             if (g_audioQueue) xQueueSend(g_audioQueue, &cmd, 0);
         }
@@ -205,9 +201,9 @@ void setup() {
         }
     });
 
-    xTaskCreatePinnedToCore(TaskNetwork, "NetTask",     8192, NULL, 1, NULL, 0); // Core 0: Wi-Fi & MQTT
-    xTaskCreatePinnedToCore(TaskAudio,   "AudioTask",   8192, NULL, 2, NULL, 0); // Core 0: Audio DMA Streamer
-    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 3, NULL, 1); // Core 1: 100% Dedicated Motion
+    xTaskCreatePinnedToCore(TaskNetwork, "NetTask",     8192, NULL, 2, NULL, 0); // Core 0: Wi-Fi & MQTT (Priority 2)
+    xTaskCreatePinnedToCore(TaskAudio,   "AudioTask",   8192, NULL, 1, NULL, 0); // Core 0: Audio DMA Streamer (Priority 1)
+    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 3, NULL, 1); // Core 1: 100% Dedicated Motion (Priority 3)
 }
 
 void loop() {
@@ -228,6 +224,15 @@ void TaskNetwork(void *pvParameters) {
 
         if (netConnected && brokerHost) {
             mqttManager.update(netConnected, brokerHost);
+        }
+
+        // Asynchronous non-blocking log drainer on Core 0 (Serial + MQTT)
+        LogEntry entry;
+        while (g_logSink.pop(entry)) {
+            Serial.println(entry.message);
+            if (netConnected && mqttManager.isConnected()) {
+                mqttManager.sendLog(entry.message);
+            }
         }
 
         if (netConnected && mqttManager.isConnected()) {
@@ -252,20 +257,15 @@ void TaskNetwork(void *pvParameters) {
                     if (g_audioQueue) xQueueSend(g_audioQueue, &bootBeep, 0);
                 }
 
-                LogEntry entry;
-                if (g_logSink.pop(entry)) {
-                    mqttManager.sendLog(entry.message);
-                }
-
                 JsonDocument telemetry;
-                telemetry["uptime"]    = now / 1000;
-                telemetry["free_heap"] = ESP.getFreeHeap();
-                telemetry["rssi"]      = WiFi.RSSI();
-                telemetry["ip"]        = netManager.getLocalIP();
-                telemetry["hotspot"]   = netManager.isHotspot();
-                telemetry["power"]     = servoManager.isOutputsEnabled();
+                telemetry["uptime"]          = now / 1000;
+                telemetry["free_heap"]       = ESP.getFreeHeap();
+                telemetry["rssi"]            = WiFi.RSSI();
+                telemetry["ip"]              = netManager.getLocalIP();
+                telemetry["hotspot"]         = netManager.isHotspot();
+                telemetry["power"]           = servoManager.isOutputsEnabled();
                 telemetry["audio"]           = isAudioBusy() ? "playing" : "idle";
-                telemetry["watchdog_braked"] = g_watchdogBraked; // Add this line
+                telemetry["watchdog_braked"] = g_watchdogBraked;
                 
                 mqttManager.sendTelemetry(telemetry);
             }

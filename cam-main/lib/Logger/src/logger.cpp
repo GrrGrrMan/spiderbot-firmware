@@ -11,11 +11,12 @@ void logPrintf(const char* tag, const char* fmt, ...) {
     vsnprintf(buffer, sizeof(buffer), fmt, args);
     va_end(args);
 
-    // 1. Output to local Serial Monitor
-    Serial.printf("[%s] %s\r\n", tag, buffer);
-
-    // 2. Push to FreeRTOS Queue for remote MQTT streaming
     char fullMsg[210];
     snprintf(fullMsg, sizeof(fullMsg), "[%s] %s", tag, buffer);
-    g_logSink.push(fullMsg);
+
+    // Non-blocking queue push: Core 1 motion task never blocks on UART
+    if (!g_logSink.push(fullMsg)) {
+        // Fallback for early boot before task scheduler runs
+        Serial.println(fullMsg);
+    }
 }

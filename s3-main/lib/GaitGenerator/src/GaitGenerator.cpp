@@ -11,13 +11,13 @@ void GaitGenerator::setGaitType(GaitType type) {
 
 void GaitGenerator::update(float dtSeconds, const VelocityCommand& cmd, LegPosition outputFootTargets[LEG_COUNT]) {
     // Only moving if translational or rotational velocity is actively commanded
-    bool isMoving = (fabsf(cmd.vx) > 1.0f || fabsf(cmd.vy) > 1.0f || fabsf(cmd.omega) > 1.0f);
+    bool isMoving = (fabsf(cmd.vx) > 0.05f || fabsf(cmd.vy) > 0.05f || fabsf(cmd.omega) > 0.05f);
 
     if (isMoving && cmd.cycleTime > 0.05f) {
         m_phaseClock += (dtSeconds / cmd.cycleTime);
         if (m_phaseClock >= 1.0f) m_phaseClock -= 1.0f;
     } else {
-        m_phaseClock = 0.0f; // Instantly lock phase to neutral ground when not walking
+        m_phaseClock = 0.0f;
     }
 
     float offsets[LEG_COUNT];

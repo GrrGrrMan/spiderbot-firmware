@@ -11,9 +11,10 @@ public:
     // Low-level register write:
     void setPWM(uint8_t globalChannel, uint16_t onTick, uint16_t offTick);
 
-    // High-level phase-staggered writes:
+    // High-level phase-staggered writes & batch commit:
     void setServoWidthTicks(uint8_t globalChannel, uint16_t widthTicks);
     void setServoPulseUs(uint8_t globalChannel, uint16_t pulseUs);
+    void commitServos();
     
     void setOutputsEnabled(bool enabled);
     bool isOutputsEnabled() const { return m_outputsEnabled; }
@@ -23,6 +24,8 @@ private:
     bool m_boardActive[2]; // Tracks if hardware actually responded
     bool m_outputsEnabled; 
     SemaphoreHandle_t m_i2cMutex;
+    uint16_t m_bufferedWidthTicks[2][16];
+    bool m_dirtyBoard[2];
     
     bool initBoard(uint8_t boardIndex);
     bool writeRegister(uint8_t boardAddr, uint8_t reg, uint8_t value);
