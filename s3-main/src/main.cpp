@@ -343,9 +343,10 @@ void TaskAudio(void *pvParameters) {
     AudioCommand cmd;
     bool isStreamingTts = false;
     bool isPrebuffered  = false;
+    bool isTtsEnding    = false;
     unsigned long lastAudioDataMs = 0;
 
-    const size_t LOW_LATENCY_PREBUFFER = 2048; // ~46ms ultra-fast startup cushion
+    const size_t LOW_LATENCY_PREBUFFER = 16384; 
 
     for (;;) {
         TickType_t waitTicks = isStreamingTts ? pdMS_TO_TICKS(2) : portMAX_DELAY;
@@ -353,14 +354,12 @@ void TaskAudio(void *pvParameters) {
         if (xQueueReceive(g_audioQueue, &cmd, waitTicks) == pdTRUE) {
             switch (cmd.type) {
                 case AudioCommandType::TONE:
-                    isStreamingTts = false;
                     audioManager.playTone(cmd.freqHz, cmd.ms);
                     strncpy(g_audioIdleAction, "tone", sizeof(g_audioIdleAction) - 1);
                     g_audioDonePending = true;
                     break;
 
                 case AudioCommandType::ALARM:
-                    isStreamingTts = false;
                     audioManager.playAlarm(cmd.alarmName[0] ? cmd.alarmName : "idle");
                     strncpy(g_audioIdleAction, "alarm", sizeof(g_audioIdleAction) - 1);
                     g_audioDonePending = true;
@@ -369,29 +368,12 @@ void TaskAudio(void *pvParameters) {
                 case AudioCommandType::TTS_START:
                     isStreamingTts = true;
                     isPrebuffered  = false;
+                    isTtsEnding    = false;
                     lastAudioDataMs = millis();
                     break;
 
                 case AudioCommandType::TTS_END:
-                    // Allow the main streaming loop to naturally drain remaining bytes without blocking
-                    if (g_pcmRingBuffer) {
-                        size_t itemSize = 0;
-                        void* item = nullptr;
-                        while ((item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(10), 1024)) != nullptr) {
-                            if (itemSize > 0) {
-                                audioManager.writePcmChunk((const int16_t*)item, itemSize / sizeof(int16_t));
-                            }
-                            vRingbufferReturnItem(g_pcmRingBuffer, item);
-                        }
-                    }
-
-                    audioManager.stop();
-                    ttsStreamer.resetFlow();
-                    isStreamingTts = false;
-                    isPrebuffered  = false;
-                    strncpy(g_audioIdleAction, "tts", sizeof(g_audioIdleAction) - 1);
-                    g_audioDonePending = true;
-                    LOG_SYS("AUDIO TTS playback complete");
+                    isTtsEnding = true;
                     break;
             }
         }
@@ -406,7 +388,7 @@ void TaskAudio(void *pvParameters) {
             }
 
             if (!isPrebuffered) {
-                if (waitingBytes >= LOW_LATENCY_PREBUFFER) {
+                if (waitingBytes >= LOW_LATENCY_PREBUFFER || isTtsEnding) {
                     isPrebuffered = true;
                 } else if (millis() - lastAudioDataMs > 1500) {
                     // Prebuffer timeout for very short utterances
@@ -418,21 +400,21 @@ void TaskAudio(void *pvParameters) {
             }
 
             size_t itemSize = 0;
-            void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(2), 1024);
+            void* item = xRingbufferReceiveUpTo(g_pcmRingBuffer, &itemSize, pdMS_TO_TICKS(2), 4096);
             if (item && itemSize > 0) {
                 audioManager.writePcmChunk((const int16_t*)item, itemSize / sizeof(int16_t));
                 vRingbufferReturnItem(g_pcmRingBuffer, item);
                 lastAudioDataMs = millis();
             } else if (waitingBytes == 0) {
-                // Safety guard: if streaming started but no data received for >2.0s, auto-return to idle
-                if (millis() - lastAudioDataMs > 2000) {
+                if (isTtsEnding || (millis() - lastAudioDataMs > 2000)) {
                     audioManager.stop();
                     ttsStreamer.resetFlow();
                     isStreamingTts = false;
                     isPrebuffered  = false;
+                    isTtsEnding    = false;
                     strncpy(g_audioIdleAction, "tts", sizeof(g_audioIdleAction) - 1);
                     g_audioDonePending = true;
-                    LOG_SYS("AUDIO TTS stream idle timeout -> reset to idle");
+                    LOG_SYS("AUDIO TTS playback complete");
                 }
                 vTaskDelay(pdMS_TO_TICKS(2));
             }

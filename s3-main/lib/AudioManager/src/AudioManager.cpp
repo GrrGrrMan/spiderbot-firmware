@@ -27,8 +27,8 @@ bool AudioManager::begin() {
     cfg.channel_format       = I2S_CHANNEL_FMT_RIGHT_LEFT;
     cfg.communication_format = I2S_COMM_FORMAT_STAND_I2S;
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
-    cfg.dma_buf_count        = 4;   // 4 buffers * 256 samples = ~35ms low-latency buffer
-    cfg.dma_buf_len          = 256;
+    cfg.dma_buf_count        = 8;   // 8 buffers * 512 samples = ~185ms resilient buffer
+    cfg.dma_buf_len          = 512;
     cfg.use_apll             = true;
     cfg.tx_desc_auto_clear   = true;
 

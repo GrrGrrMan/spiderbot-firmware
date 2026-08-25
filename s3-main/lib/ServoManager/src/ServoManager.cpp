@@ -10,6 +10,14 @@ ServoManager::ServoManager() {
     m_boardActive[1] = false;
     m_outputsEnabled = false;
     m_i2cMutex = nullptr;
+    
+    // Initialize batch buffers
+    for (int i = 0; i < 2; i++) {
+        m_dirtyBoard[i] = false;
+        for (int j = 0; j < 16; j++) {
+            m_bufferedWidthTicks[i][j] = 0;
+        }
+    }
 }
 
 void ServoManager::begin() {
@@ -155,16 +163,51 @@ void ServoManager::setOutputsEnabled(bool enabled) {
     }
 }
 
+// Replaced direct write with a buffer logic that triggers flags for `commitServos`
 void ServoManager::setServoWidthTicks(uint8_t globalChannel, uint16_t widthTicks) {
+    uint8_t boardIndex = globalChannel / 16;
     uint8_t localChannel = globalChannel % 16;
-    // Per-board channel staggering prevents simultaneous current spikes without wrapping 4096
-    uint16_t onTick = localChannel * LOCAL_STAGGER_TICKS;
-    uint16_t offTick = onTick + widthTicks;
-    setPWM(globalChannel, onTick, offTick);
+    
+    if (boardIndex < PCA_NUM_BOARDS) {
+        if (m_bufferedWidthTicks[boardIndex][localChannel] != widthTicks) {
+            m_bufferedWidthTicks[boardIndex][localChannel] = widthTicks;
+            m_dirtyBoard[boardIndex] = true;
+        }
+    }
 }
 
 void ServoManager::setServoPulseUs(uint8_t globalChannel, uint16_t pulseUs) {
     uint16_t safePulse = constrain(pulseUs, (uint16_t)488, (uint16_t)2393);
     uint16_t widthTicks = (safePulse * 4096UL) / 20000UL;
     setServoWidthTicks(globalChannel, widthTicks);
+}
+
+// Added the missing commitServos function to handle bulk PCA9685 burst transactions
+void ServoManager::commitServos() {
+    for (uint8_t b = 0; b < PCA_NUM_BOARDS; b++) {
+        if (!m_boardActive[b] || !m_dirtyBoard[b]) continue;
+
+        uint8_t boardAddr = m_boardAddresses[b];
+        
+        if (m_i2cMutex && xSemaphoreTake(m_i2cMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+            // Write from LED0 (channel 0) to LED15
+            Wire.beginTransmission(boardAddr);
+            Wire.write(PCA_LED0_ON_L); // 0x06 Auto-increments inside the PCA9685
+            
+            for (uint8_t ch = 0; ch < 16; ch++) {
+                uint16_t widthTicks = m_bufferedWidthTicks[b][ch];
+                uint16_t onTick = ch * LOCAL_STAGGER_TICKS;
+                uint16_t offTick = onTick + widthTicks;
+                
+                Wire.write(onTick & 0xFF);
+                Wire.write((onTick >> 8) & 0x0F);
+                Wire.write(offTick & 0xFF);
+                Wire.write((offTick >> 8) & 0x0F);
+            }
+            Wire.endTransmission();
+            xSemaphoreGive(m_i2cMutex);
+        }
+        
+        m_dirtyBoard[b] = false;
+    }
 }
