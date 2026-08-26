@@ -1,0 +1,32 @@
+#pragma once
+
+#include <Arduino.h>
+
+// ── OTA Source Configuration Struct ─────────────────────────────────────────
+struct OtaSourceConfig {
+    String owner;        // GitHub username or organization
+    String repo;         // Repository name
+    String branch;       // Branch (e.g., "main" or "release")
+    String projectPath;  // Path inside repository leading to the artifact folder
+    String artifactName; // Artifact base name (firmware appends .md5 and .bin)
+    bool isPrivate;      // True to use GitHub REST API v3 with Bearer token
+    String authToken;    // GitHub Personal Access Token (PAT) if private
+};
+
+// ── Primary OTA Source (Production Releases) ─────────────────────────────────
+#define OTA_PRIMARY_OWNER        "your-github-username"
+#define OTA_PRIMARY_REPO         "hexapod-firmware"
+#define OTA_PRIMARY_BRANCH       "main"
+#define OTA_PRIMARY_PROJECT_PATH "binaries/s3/"       // or "binaries/cam/" for cam-main
+#define OTA_PRIMARY_ARTIFACT     "firmware"           // Fetches firmware.md5 & firmware.bin
+#define OTA_PRIMARY_PRIVATE      false                // Set true if repo is private
+#define OTA_PRIMARY_TOKEN        ""                   // ghp_xxxxxxxxxxxx (if private)
+
+// ── Fallback OTA Source (Emergency Backup Repository / Mirror) ───────────────
+#define OTA_FALLBACK_OWNER       "your-backup-org"
+#define OTA_FALLBACK_REPO        "hexapod-firmware-mirror"
+#define OTA_FALLBACK_BRANCH      "main"
+#define OTA_FALLBACK_PROJECT_PATH "binaries/s3/"
+#define OTA_FALLBACK_ARTIFACT     "firmware"
+#define OTA_FALLBACK_PRIVATE      false
+#define OTA_FALLBACK_TOKEN        ""

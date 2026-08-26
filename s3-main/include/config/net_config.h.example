@@ -1,0 +1,49 @@
+#pragma once
+
+#include <Arduino.h>
+
+// ── Node Identity ────────────────────────────────────────────────────────────
+// Set "hexapod-s3-01" for s3-main OR "hexapod-cam-01" for cam-main
+#ifndef DEVICE_ID
+#define DEVICE_ID "hexapod-s3-01"
+#endif
+
+// Maximum MQTT broker fallback candidates per network profile
+#define MAX_BROKERS_PER_SSID 3
+
+// ── Network Candidate Definition ─────────────────────────────────────────────
+struct KnownNetwork {
+    const char* ssid;                                // Wi-Fi SSID
+    const char* pass;                                // Wi-Fi Password
+    bool isHotspot;                                  // True if connecting to Pi-Hub AP
+    const char* mqttBrokers[MAX_BROKERS_PER_SSID];  // Broker IP / mDNS / Hostnames
+};
+
+// ── Known Wi-Fi Networks (Evaluated via WiFiMulti in order) ───────────────────
+// The firmware will connect to the strongest signal and iterate through the
+// broker candidates sequentially until a connection is established.
+const KnownNetwork KNOWN_NETWORKS[] = {
+    {
+        // Profile 1: Pi-Hub Direct Access Point (Default field operation)
+        "spiderlink",
+        "spiderbot",
+        true,
+        { "192.168.4.1", "spider.local", nullptr }
+    },
+    {
+        // Profile 2: Home / Lab Local Wi-Fi (Development & Debugging)
+        "YOUR_HOME_WIFI_SSID",
+        "YOUR_HOME_WIFI_PASSWORD",
+        false,
+        { "spider.local", "192.168.1.100", "broker.emqx.io" }
+    },
+    {
+        // Profile 3: Wokwi CI / Virtual Test Network
+        "Wokwi-GUEST",
+        "",
+        false,
+        { "broker.emqx.io", nullptr, nullptr }
+    }
+};
+
+const size_t KNOWN_NETWORKS_COUNT = sizeof(KNOWN_NETWORKS) / sizeof(KNOWN_NETWORKS[0]);
