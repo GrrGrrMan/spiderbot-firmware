@@ -77,7 +77,7 @@ To guarantee jitter-free 100 Hz kinematic execution while sustaining high-throug
 - **Target Microcontroller:** ESP32-S3 (ESP32-S3-DevKitC-1-N16R8, 16MB Flash, 8MB Octal PSRAM).
 - **Core Responsibilities:**
   - Analytical 3-DOF Inverse Kinematics for all 18 hexapod leg joints.
-  - 6-DOF body translation and rotational pose orientation matrix ($R^T$).
+  - 6-DOF body translation and rotational pose orientation matrix.
   - Omnidirectional locomotion (Tripod, Ripple, Wave gaits) with dynamic stance and hip splay.
   - Multi-Keyframe Choreography Sequencer with analytical easing curves (Cubic, Quad, Sine, Quintic/Minimum-Jerk).
   - Dual PCA9685 PWM drivers with non-wrapping phase offsets for current ripple reduction.
@@ -161,57 +161,59 @@ The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x
 
 ### 3-DOF Analytical Inverse Kinematics
 
-Each leg operates as a 3-DOF open kinematic chain parameterized by Coxa ($L_1 = 52.0\text{ mm}$), Femur ($L_2 = 66.0\text{ mm}$), and Tibia ($L_3 = 132.0\text{ mm}$).
+Each leg operates as a 3-DOF open kinematic chain parameterized by Coxa link length `L1 = 52.0 mm`, Femur link length `L2 = 66.0 mm`, and Tibia link length `L3 = 132.0 mm`.
 
-Given target coordinates $(x, y, z)$ in the leg's local coordinate frame:
+Given target coordinates `(x, y, z)` in the leg's local coordinate frame:
 
-1. **Coxa Joint Angle ($\alpha$):**
-   $$
-   \alpha = \text{atan2}(y, x)
-   $$
+```math
+\alpha = \text{atan2}(y, x)
+```
 
-2. **Planar Distance ($D$) & Reachability Protection:**
-   $$
-   d_{\text{planar}} = \sqrt{x^2 + y^2} - L_1, \quad D = \sqrt{d_{\text{planar}}^2 + z^2}
-   $$
-   $$
-   D_{\text{clamped}} = \max\Big(\min\big(D, (L_2 + L_3) - 0.1\big), |L_2 - L_3| + 0.1\Big)
-   $$
+```math
+d_{\text{planar}} = \sqrt{x^2 + y^2} - L_1, \quad D = \sqrt{d_{\text{planar}}^2 + z^2}
+```
 
-3. **Femur Joint Angle ($\beta$):**
-   $$
-   \alpha_1 = \text{atan2}(-z, d_{\text{planar}}), \quad \alpha_2 = \arccos\left(\frac{L_2^2 + D^2 - L_3^2}{2 L_2 D}\right)
-   $$
-   $$
-   \beta = (\alpha_1 - \alpha_2) \cdot \frac{180^\circ}{\pi}
-   $$
+```math
+D_{\text{clamped}} = \max\Big(\min\big(D, (L_2 + L_3) - 0.1\big), |L_2 - L_3| + 0.1\Big)
+```
 
-4. **Tibia Joint Angle ($\gamma$):**
-   $$
-   \beta_{\text{joint}} = \arccos\left(\frac{L_2^2 + L_3^2 - D^2}{2 L_2 L_3}\right)
-   $$
-   $$
-   \gamma = \left((\pi - \beta_{\text{joint}}) \cdot \frac{180^\circ}{\pi}\right) - 90^\circ
-   $$
+```math
+\alpha_1 = \text{atan2}(-z, d_{\text{planar}}), \quad \alpha_2 = \arccos\left(\frac{L_2^2 + D^2 - L_3^2}{2 L_2 D}\right)
+```
+
+```math
+\beta = (\alpha_1 - \alpha_2) \cdot \frac{180^\circ}{\pi}
+```
+
+```math
+\beta_{\text{joint}} = \arccos\left(\frac{L_2^2 + L_3^2 - D^2}{2 L_2 L_3}\right)
+```
+
+```math
+\gamma = \left((\pi - \beta_{\text{joint}}) \cdot \frac{180^\circ}{\pi}\right) - 90^\circ
+```
 
 ---
 
 ### 6-DOF Body Pose & Coordinate Transformation
 
-The firmware supports 6-DOF body translation $(\Delta x, \Delta y, \Delta z)$ and Tait-Bryan rotation (Roll $\phi$, Pitch $\theta$, Yaw $\psi$) relative to the foot contact points.
+The firmware supports 6-DOF body translation `(Δx, Δy, Δz)` and Tait-Bryan rotation `(Roll φ, Pitch θ, Yaw ψ)` relative to the ground foot contact points.
 
-For each leg $i$ with mounting angle $\theta_{m,i}$ and mount offset $\mathbf{M}_i$:
-$$
+For each leg `i` with mounting angle `θ_m,i` and mount offset `M_i`:
+
+```math
 \mathbf{P}_{\text{body}, i} = \mathbf{M}_i + \mathbf{R}_z(\theta_{m,i}) \cdot \mathbf{P}_{\text{local}, i}
-$$
+```
 
-The inverse rotation transform accounts for center-of-mass translation $\mathbf{T}_{\text{body}} = [\Delta x, \Delta y, \Delta z]^T$ and rotation:
-$$
+The inverse rotation transform accounts for center-of-mass translation `T_body = [Δx, Δy, Δz]^T` and rotation:
+
+```math
 \mathbf{P}_{\text{transformed}, i} = \mathbf{R}_z(-\psi)\mathbf{R}_y(-\theta)\mathbf{R}_x(-\phi) \cdot (\mathbf{P}_{\text{body}, i} - \mathbf{T}_{\text{body}})
-$$
-$$
+```
+
+```math
 \mathbf{P}_{\text{leg\_ik}, i} = \mathbf{R}_z(-\theta_{m,i}) \cdot (\mathbf{P}_{\text{transformed}, i} - \mathbf{M}_i)
-$$
+```
 
 ---
 
@@ -219,11 +221,13 @@ $$
 
 The `GaitGenerator` supports **Tripod** (2-phase, 50% swing ratio), **Ripple** (6-phase, 33.3% swing ratio), and **Wave** (6-phase, 16.7% swing ratio) gaits.
 
-The phase clock advances continuously via $dt / \text{cycleTime}$, calculating continuous 3D foot swing arches:
-$$
+The phase clock advances continuously via `dt / cycleTime`, calculating continuous 3D foot swing arches:
+
+```math
 z_{\text{foot}} = \sin(\text{progress} \cdot \pi) \cdot \text{stepHeight}
-$$
-together with omnidirectional ground stance translations ($V_x, V_y, \omega$).
+```
+
+Ground stance vectors are simultaneously calculated across all six feet using translational velocities `(Vx, Vy)` and yaw angular rate `ω`.
 
 ---
 
@@ -233,11 +237,11 @@ The `SequencePoser` interprets timeline sequences with per-segment durations and
 
 | Easing Type | Mathematical Formula | Transition Characteristics |
 |---|---|---|
-| `LINEAR` | $s(\tau) = \tau$ | Constant velocity; abrupt starts and stops. |
-| `EASE_IN_OUT_QUAD` | $2\tau^2 \text{ for } \tau < 0.5 \text{ else } 1 - \frac{(-2\tau + 2)^2}{2}$ | Quadratic acceleration and deceleration. |
-| `EASE_IN_OUT_CUBIC` | $4\tau^3 \text{ for } \tau < 0.5 \text{ else } 1 - \frac{(-2\tau + 2)^3}{2}$ | **Default:** Smooth S-curve transition. |
-| `EASE_IN_OUT_SINE` | $-\frac{1}{2}(\cos(\pi\tau) - 1)$ | Gentle harmonic sinusoidal transition. |
-| `MINIMUM_JERK` | $10\tau^3 - 15\tau^4 + 6\tau^5$ | Quintic polynomial; zero velocity and jerk at boundaries. |
+| `LINEAR` | `s(τ) = τ` | Constant velocity; abrupt starts and stops. |
+| `EASE_IN_OUT_QUAD` | `s(τ) = 2τ²` for `τ < 0.5`, else `1 - (-2τ + 2)² / 2` | Quadratic acceleration and deceleration. |
+| `EASE_IN_OUT_CUBIC` | `s(τ) = 4τ³` for `τ < 0.5`, else `1 - (-2τ + 2)³ / 2` | **Default:** Smooth S-curve transition. |
+| `EASE_IN_OUT_SINE` | `s(τ) = -0.5 * (cos(π * τ) - 1)` | Gentle harmonic sinusoidal transition. |
+| `MINIMUM_JERK` | `s(τ) = 10τ³ - 15τ⁴ + 6τ⁵` | Quintic polynomial; zero velocity and jerk at boundaries. |
 
 ---
 
