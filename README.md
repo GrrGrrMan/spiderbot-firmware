@@ -488,3 +488,10 @@ wokwi-cli firmware/cam-main/scenarios/cam-only/ --scenario test-bringup-smoke.ya
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for complete details.
 
 ---
+
+
+
+
+
+
+
