@@ -1,8 +1,3 @@
-Here is the complete solution:
-1. **Fixed Mathematical Formulas** (replaced `\operatorname` with standard GitHub KaTeX `\text` macros).
-2. **Unified D2 Scripts for ALL 7 diagrams** (including the Binary Audio Frame and Hardware Timing diagrams, so you can generate every single SVG from the single **[play.d2lang.com](https://play.d2lang.com)** editor).
-3. **The full corrected `README.md`** formatted directly below.
-
 ---
 
 # Hexapod V2 — Dual-Node Embedded Firmware
@@ -168,42 +163,69 @@ The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x
 
 ### 3-DOF Analytical Inverse Kinematics
 
-Each leg operates as a 3-DOF open kinematic chain parameterized by Coxa ($L_1 = 52.0\,\text{mm}$), Femur ($L_2 = 66.0\,\text{mm}$), and Tibia ($L_3 = 132.0\,\text{mm}$):
+Each leg operates as a 3-DOF open kinematic chain parameterized by Coxa ($L_1 = 52.0\text{ mm}$), Femur ($L_2 = 66.0\text{ mm}$), and Tibia ($L_3 = 132.0\text{ mm}$).
 
 Given target coordinates $(x, y, z)$ in the leg's local coordinate frame:
 
 1. **Coxa Joint Angle ($\alpha$):**
-   $$\alpha = \text{atan2}(y, x)$$
+   $$
+   \alpha = \text{atan2}(y, x)
+   $$
+
 2. **Planar Distance ($D$) & Reachability Protection:**
-   $$\text{dist}_{\text{planar}} = \sqrt{x^2 + y^2} - L_1, \quad D = \sqrt{\text{dist}_{\text{planar}}^2 + z^2}$$
-   $$D_{\text{clamped}} = \max\Big(\min\big(D, (L_2 + L_3) - 0.1\big), |L_2 - L_3| + 0.1\Big)$$
+   $$
+   d_{\text{planar}} = \sqrt{x^2 + y^2} - L_1, \quad D = \sqrt{d_{\text{planar}}^2 + z^2}
+   $$
+   $$
+   D_{\text{clamped}} = \max\Big(\min\big(D, (L_2 + L_3) - 0.1\big), |L_2 - L_3| + 0.1\Big)
+   $$
+
 3. **Femur Joint Angle ($\beta$):**
-   $$\alpha_1 = \text{atan2}(-z, \text{dist}_{\text{planar}}), \quad \alpha_2 = \arccos\left(\frac{L_2^2 + D^2 - L_3^2}{2 L_2 D}\right)$$
-   $$\beta = (\alpha_1 - \alpha_2) \cdot \frac{180^\circ}{\pi}$$
+   $$
+   \alpha_1 = \text{atan2}(-z, d_{\text{planar}}), \quad \alpha_2 = \arccos\left(\frac{L_2^2 + D^2 - L_3^2}{2 L_2 D}\right)
+   $$
+   $$
+   \beta = (\alpha_1 - \alpha_2) \cdot \frac{180^\circ}{\pi}
+   $$
+
 4. **Tibia Joint Angle ($\gamma$):**
-   $$\beta_{\text{joint}} = \arccos\left(\frac{L_2^2 + L_3^2 - D^2}{2 L_2 L_3}\right)$$
-   $$\gamma = \left((\pi - \beta_{\text{joint}}) \cdot \frac{180^\circ}{\pi}\right) - 90^\circ$$
+   $$
+   \beta_{\text{joint}} = \arccos\left(\frac{L_2^2 + L_3^2 - D^2}{2 L_2 L_3}\right)
+   $$
+   $$
+   \gamma = \left((\pi - \beta_{\text{joint}}) \cdot \frac{180^\circ}{\pi}\right) - 90^\circ
+   $$
 
 ---
 
 ### 6-DOF Body Pose & Coordinate Transformation
 
-The firmware supports 6-DOF body translation ($\Delta x, \Delta y, \Delta z$) and Tait-Bryan rotation (Roll $\phi$, Pitch $\theta$, Yaw $\psi$) relative to the foot contact points.
+The firmware supports 6-DOF body translation $(\Delta x, \Delta y, \Delta z)$ and Tait-Bryan rotation (Roll $\phi$, Pitch $\theta$, Yaw $\psi$) relative to the foot contact points.
 
 For each leg $i$ with mounting angle $\theta_{m,i}$ and mount offset $\mathbf{M}_i$:
-$$\mathbf{P}_{\text{body}, i} = \mathbf{M}_i + \mathbf{R}_z(\theta_{m,i}) \cdot \mathbf{P}_{\text{local\_foot}, i}$$
+$$
+\mathbf{P}_{\text{body}, i} = \mathbf{M}_i + \mathbf{R}_z(\theta_{m,i}) \cdot \mathbf{P}_{\text{local}, i}
+$$
 
-The inverse rotation transform accounts for center-of-mass shifts:
-$$\mathbf{P}_{\text{transformed}, i} = \mathbf{R}_z(-\psi)\mathbf{R}_y(-\theta)\mathbf{R}_x(-\phi) \cdot (\mathbf{P}_{\text{body}, i} - \mathbf{T}_{\text{body}})$$
-$$\mathbf{P}_{\text{leg\_ik}, i} = \mathbf{R}_z(-\theta_{m,i}) \cdot (\mathbf{P}_{\text{transformed}, i} - \mathbf{M}_i)$$
+The inverse rotation transform accounts for center-of-mass translation $\mathbf{T}_{\text{body}} = [\Delta x, \Delta y, \Delta z]^T$ and rotation:
+$$
+\mathbf{P}_{\text{transformed}, i} = \mathbf{R}_z(-\psi)\mathbf{R}_y(-\theta)\mathbf{R}_x(-\phi) \cdot (\mathbf{P}_{\text{body}, i} - \mathbf{T}_{\text{body}})
+$$
+$$
+\mathbf{P}_{\text{leg\_ik}, i} = \mathbf{R}_z(-\theta_{m,i}) \cdot (\mathbf{P}_{\text{transformed}, i} - \mathbf{M}_i)
+$$
 
 ---
 
 ### Omnidirectional Gait Engine
 
-The `GaitGenerator` supports **Tripod** (2-phase, $\frac{1}{2}$ swing ratio), **Ripple** (6-phase, $\frac{1}{3}$ swing ratio), and **Wave** (6-phase, $\frac{1}{6}$ swing ratio) gaits.
+The `GaitGenerator` supports **Tripod** (2-phase, 50% swing ratio), **Ripple** (6-phase, 33.3% swing ratio), and **Wave** (6-phase, 16.7% swing ratio) gaits.
 
-The phase clock advances continuously via $dt / \text{cycleTime}$, calculating continuous 3D foot swing arches ($z = \sin(\text{progress} \cdot \pi) \cdot \text{stepHeight}$) and linear ground stance translations.
+The phase clock advances continuously via $dt / \text{cycleTime}$, calculating continuous 3D foot swing arches:
+$$
+z_{\text{foot}} = \sin(\text{progress} \cdot \pi) \cdot \text{stepHeight}
+$$
+together with omnidirectional ground stance translations ($V_x, V_y, \omega$).
 
 ---
 
@@ -214,10 +236,10 @@ The `SequencePoser` interprets timeline sequences with per-segment durations and
 | Easing Type | Mathematical Formula | Transition Characteristics |
 |---|---|---|
 | `LINEAR` | $s(\tau) = \tau$ | Constant velocity; abrupt starts and stops. |
-| `EASE_IN_OUT_QUAD` | $s(\tau) = 2\tau^2 \;\; (\tau < 0.5) \;\mid\; 1 - \frac{(-2\tau + 2)^2}{2}$ | Quadratic acceleration / deceleration. |
-| `EASE_IN_OUT_CUBIC` | $s(\tau) = 4\tau^3 \;\; (\tau < 0.5) \;\mid\; 1 - \frac{(-2\tau + 2)^3}{2}$ | **Default:** Smooth S-curve transition. |
-| `EASE_IN_OUT_SINE` | $s(\tau) = -\frac{\cos(\pi\tau) - 1}{2}$ | Gentle harmonic sinusoidal transition. |
-| `MINIMUM_JERK` | $s(\tau) = 10\tau^3 - 15\tau^4 + 6\tau^5$ | Quintic polynomial; zero velocity & jerk at boundaries. |
+| `EASE_IN_OUT_QUAD` | $2\tau^2 \text{ for } \tau < 0.5 \text{ else } 1 - \frac{(-2\tau + 2)^2}{2}$ | Quadratic acceleration and deceleration. |
+| `EASE_IN_OUT_CUBIC` | $4\tau^3 \text{ for } \tau < 0.5 \text{ else } 1 - \frac{(-2\tau + 2)^3}{2}$ | **Default:** Smooth S-curve transition. |
+| `EASE_IN_OUT_SINE` | $-\frac{1}{2}(\cos(\pi\tau) - 1)$ | Gentle harmonic sinusoidal transition. |
+| `MINIMUM_JERK` | $10\tau^3 - 15\tau^4 + 6\tau^5$ | Quintic polynomial; zero velocity and jerk at boundaries. |
 
 ---
 
@@ -486,12 +508,3 @@ wokwi-cli firmware/cam-main/scenarios/cam-only/ --scenario test-bringup-smoke.ya
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for complete details.
-
----
-
-
-
-
-
-
-
