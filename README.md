@@ -1,3 +1,10 @@
+Here is the complete production-grade `README.md` for the firmware, followed by the zero-install diagram source codes, tool links, and target file paths.
+
+---
+
+### Section 1: Complete `README.md`
+
+```markdown
 # Hexapod V2 — Dual-Node Embedded Firmware
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Core%20v6.0+-orange.svg)](https://platformio.org/)
@@ -50,46 +57,7 @@ The **Hexapod V2 Firmware** repository contains the embedded software powering t
 
 The robotics platform divides processing across an **ESP32-S3-DevKitC-1** (responsible for real-time kinematics, servo driving, and I2S audio playback) and an **AI-Thinker ESP32-CAM** (dedicated to video acquisition and lighting). Both nodes independently discover network endpoints and the Pi-Hub MQTT broker via mDNS.
 
-```mermaid
-flowchart TD
-    subgraph HubTier ["Pi-Hub Computing & AI Tier"]
-        MOSQ["Mosquitto MQTT Broker<br/>(:1883 TCP)"]
-        RELAY["Camera Relay Proxy<br/>(:8088 HTTP)"]
-    end
-
-    subgraph S3Node ["Node 1: ESP32-S3 (Motion & Audio)"]
-        S3_NET["TaskNetwork (Core 0)<br/>WiFiMulti / MQTT / Telemetry"]
-        S3_AUD["TaskAudio (Core 0)<br/>RingBuffer DMA Consumer"]
-        S3_MOT["TaskControl (Core 1)<br/>100 Hz IK & Gait Loop"]
-        S3_PSRAM["512KB PSRAM<br/>Audio RingBuffer"]
-    end
-
-    subgraph CamNode ["Node 2: ESP32-CAM (Vision & Lamp)"]
-        CAM_NET["TaskNetwork (Core 0)<br/>WiFiMulti / MQTT / Telemetry"]
-        CAM_HTTP["CameraServer (Core 1)<br/>MJPEG Server (:81/stream)"]
-    end
-
-    subgraph ActuatorsAudio ["Actuators & Transducers"]
-        PCA0["PCA9685 #1 (0x40)<br/>Right Legs (RF, RM, RR)"]
-        PCA1["PCA9685 #2 (0x41)<br/>Left Legs (LR, LM, LF)"]
-        I2S_AMP["MAX98357A I2S DAC<br/>(3W Class-D Mono)"]
-        FLASH_LED["High-Power White LED<br/>(GPIO 4 PWM)"]
-        OV_SENSOR["OV3660 / OV2640 Sensor<br/>(DVP 8-bit Parallel)"]
-    end
-
-    MOSQ <-->|Commands & Audio Packets| S3_NET
-    MOSQ <-->|Telemetry & Controls| CAM_NET
-    CAM_HTTP -->|Raw MJPEG Stream| RELAY
-
-    S3_NET -->|Raw PCM Frames| S3_PSRAM
-    S3_PSRAM -->|Feed Stream| S3_AUD
-    S3_AUD -->|I2S Bus (BCLK/LRC/DIN)| I2S_AMP
-    S3_MOT -->|400kHz Fast I2C| PCA0
-    S3_MOT -->|400kHz Fast I2C| PCA1
-
-    CAM_NET -->|LEDC PWM| FLASH_LED
-    OV_SENSOR -->|Direct DMA Frame Capture| CAM_HTTP
-```
+![System Architecture](docs/images/system_architecture.svg)
 
 ---
 
@@ -97,25 +65,7 @@ flowchart TD
 
 To guarantee jitter-free 100 Hz kinematic execution while sustaining high-throughput network and audio pipelines, operations are partitioned across the Xtensa dual cores:
 
-```mermaid
-gantt
-    title ESP32-S3 Symmetrical Multiprocessing (SMP) Task Allocation
-    dateFormat  X
-    axisFormat %s
-
-    section Core 0 (Priority 2)
-    TaskNetwork : active, net1, 0, 10
-    MQTT Updates & Log Sink Pop : active, net2, 10, 20
-    Telemetry Publish : active, net3, 90, 100
-
-    section Core 0 (Priority 1)
-    TaskAudio DMA Streamer : aud1, 0, 100
-
-    section Core 1 (Priority 3)
-    TaskControl (100 Hz Kinematics) : crit, mot1, 0, 10
-    PCA9685 I2C Bulk Burst Transmit : crit, mot2, 10, 15
-    vTaskDelayUntil (Deterministic Sleep) : crit, mot3, 15, 100
-```
+![FreeRTOS Task Architecture](docs/images/task_architecture.svg)
 
 - **ESP32-S3 Core 0:**
   - `TaskNetwork` (Priority 2, 8KB stack): Manages `WiFiMulti` failover, MQTT communication, retained config handshakes, non-blocking log sink draining, and binary audio frame ingestion.
@@ -185,15 +135,7 @@ gantt
 
 The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x40`) controls the right side, and Board 2 (`0x41`, A0 jumper bridged) controls the left side.
 
-```
-       FRONT (Head)
-     [LF]       [RF]      Leg Index Layout:
-      \           /       0: Right Front (RF)   3: Left Rear (LR)
-  [LM] -+-------+- [RM]   1: Right Middle (RM)  4: Left Middle (LM)
-      /           \       2: Right Rear (RR)    5: Left Front (LF)
-     [LR]       [RR]
-        BACK (Tail)
-```
+![Leg Kinematics and Coordinate Layout](docs/images/leg_kinematics.svg)
 
 | Leg Index | Position | Joint | Global Ch | PCA Board | I2C Addr | Local Ch | Inverted | Phase Stagger |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -218,6 +160,8 @@ The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x
 
 > **PWM Phase-Staggering:** To eliminate synchronized current spikes that cause logic resets, each channel's `ON` edge is offset by `ch * 150` ticks. With pulse widths up to 490 ticks, the maximum count `15 * 150 + 490 = 2740` never wraps around the 12-bit (4096-tick) counter.
 
+![Hardware Waveforms and Timing](docs/images/hardware_timing.svg)
+
 ---
 
 ## Kinematics & Motion Control Subsystem
@@ -225,19 +169,6 @@ The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x
 ### 3-DOF Analytical Inverse Kinematics
 
 Each leg operates as a 3-DOF open kinematic chain parameterized by Coxa ($L_1 = 52.0\,\text{mm}$), Femur ($L_2 = 66.0\,\text{mm}$), and Tibia ($L_3 = 132.0\,\text{mm}$):
-
-```
-         (Coxa Pivot)
-            [O] ====== L1 ====== [Femur Joint]
-                                   \
-                                    \  L2 (Femur)
-                                     \
-                                     [Tibia Joint]
-                                     /
-                                    /   L3 (Tibia)
-                                   /
-                                  o (Foot Tip Target: x, y, z)
-```
 
 Given target coordinates $(x, y, z)$ in the leg's local coordinate frame:
 
@@ -272,26 +203,7 @@ $$\mathbf{P}_{\text{leg\_ik}, i} = \mathbf{R}_z(-\theta_{m,i}) \cdot (\mathbf{P}
 
 The `GaitGenerator` supports **Tripod** (2-phase, $\frac{1}{2}$ swing ratio), **Ripple** (6-phase, $\frac{1}{3}$ swing ratio), and **Wave** (6-phase, $\frac{1}{6}$ swing ratio) gaits.
 
-```mermaid
-sequenceDiagram
-    autonumber
-    participant Gait as Gait Generator
-    participant IK as Hexapod Kinematics
-    participant Slew as Slew Limiter
-    participant PCA as Servo Manager (I2C)
-
-    loop 100 Hz Motion Loop (dt = 0.01s)
-        Gait->>Gait: Advance Phase Clock (dt / cycleTime)
-        Gait->>Gait: Compute Stance/Swing Foot Offsets (Vx, Vy, Omega)
-        Gait->>IK: Pass Local 3D Foot Targets
-        IK->>IK: Apply 6-DOF Body Transform Matrix (R^T)
-        IK->>IK: Solve Analytical 3-DOF IK for 6 Legs
-        IK->>Slew: Output 18 Desired Joint Angles
-        Slew->>Slew: Clamp Rate of Change (deg/sec limit)
-        Slew->>PCA: Buffer Calculated Pulse Ticks
-        PCA->>PCA: Bulk Write to Dual PCA9685 (0x40 / 0x41)
-    end
-```
+The phase clock advances continuously via $dt / \text{cycleTime}$, calculating continuous 3D foot swing arches ($z = \sin(\text{progress} \cdot \pi) \cdot \text{stepHeight}$) and linear ground stance translations.
 
 ---
 
@@ -313,29 +225,7 @@ The `SequencePoser` interprets timeline sequences with per-segment durations and
 
 To protect servo gear trains, prevent battery brownouts, and handle network disconnects gracefully, the motion system enforces multi-layered safeguards:
 
-```mermaid
-stateDiagram-v2
-    [*] --> LIMP_SLEEP : Boot (OE=HIGH)
-    
-    LIMP_SLEEP --> ACTIVE_MOTION : Motion Command Received
-    note right of ACTIVE_MOTION
-        1.5s Soft-Start Active:
-        Velocity ramped from 50 deg/s -> 240 deg/s
-    end note
-
-    ACTIVE_MOTION --> AUTO_BRAKE : Inactivity > 30s (Watchdog Stage 1)
-    note right of AUTO_BRAKE
-        Velocity automatically clamped to 0.
-        Firmware holds stable stance.
-    end note
-
-    AUTO_BRAKE --> ACTIVE_MOTION : New Motion Command
-    AUTO_BRAKE --> LIMP_SLEEP : Inactivity > 15s (Watchdog Stage 2)
-    note right of LIMP_SLEEP
-        PCA9685 Full-OFF broadcast sent.
-        OE asserted HIGH to remove torque.
-    end note
-```
+![Safety Watchdog State Machine](docs/images/watchdog_state.svg)
 
 ---
 
@@ -345,36 +235,7 @@ stateDiagram-v2
 
 The ESP32-S3 ingests raw PCM streaming audio directly via MQTT using an optimized 10-byte binary framed header:
 
-```
-Offset | Type   | Description
--------|--------|---------------------------------------------------------
-0x00   | uint8  | Magic identifier (0xAA)
-0x01   | uint8  | Action flag (0x00 = TTS / PCM Chunk)
-0x02   | uint32 | Flow ID (Random session token)
-0x06   | uint16 | Chunk sequence index (0 .. Total - 1)
-0x08   | uint16 | Total chunk count (0 for unbounded live streams)
-0x0A+  | bytes  | 16-bit 22,050 Hz Little-Endian Mono PCM Samples
-```
-
-```mermaid
-sequenceDiagram
-    participant Hub as Pi-Hub (Piper TTS / Streamer)
-    participant Core0 as ESP32-S3 Core 0 (TaskNetwork)
-    participant PSRAM as 512KB PSRAM RingBuffer
-    participant Core1 as ESP32-S3 Core 0 (TaskAudio)
-    participant DAC as MAX98357A I2S DAC
-
-    Hub->>Core0: Publish MQTT hexapod/{id}/audio (Binary 0xAA Header + PCM)
-    Core0->>Core0: Validate Header & Unpack Payload
-    Core0->>PSRAM: xRingbufferSend (Direct Memory Push)
-    
-    loop Real-time Audio Pump
-        Core1->>PSRAM: xRingbufferReceiveUpTo (4KB Chunks)
-        Core1->>Core1: Apply Q15 Fixed-Point Gain Scaling
-        Core1->>DAC: i2s_write (Stereo-duplicated DMA Frames)
-        DAC-->>Core1: DMA Complete Callback
-    end
-```
+![Binary Audio Frame Layout](docs/images/audio_frame.svg)
 
 ---
 
@@ -396,6 +257,8 @@ The ESP32-CAM hosts a dedicated `esp_http_server` instance on port 81 (`/stream`
 
 ```
 firmware/
+├── docs/
+│   └── images/                    # Vector SVG architecture & timing diagrams
 ├── extra_scripts/
 │   ├── add_includes.py            # PlatformIO recursive header include script
 │   └── push_firmware.py           # Auto-MD5 generator & GitHub binary publisher
@@ -590,25 +453,7 @@ pio device monitor -b 115200
 
 Both nodes incorporate an automated, two-tier OTA update engine with partition rollback validation:
 
-```mermaid
-flowchart TD
-    CMD["OTA Command Received<br/>(hexapod/{id}/cmd)"] --> NTP["Sync NTP Time<br/>(pool.ntp.org)"]
-    NTP --> CHECK_PRI["Check Primary Repository<br/>(GitHub Raw / API)"]
-    
-    CHECK_PRI -->|MD5 Hash Matches| UP_TO_DATE["Firmware Up to Date (No Action)"]
-    CHECK_PRI -->|MD5 Mismatch| FLASH_PRI["Download & Stream Flash .bin"]
-    CHECK_PRI -->|HTTP Error / Timeout| FAILOVER["Trigger Fallback Repository"]
-
-    FAILOVER --> CHECK_FALL["Check Fallback Repository"]
-    CHECK_FALL -->|MD5 Mismatch| FLASH_FALL["Download & Stream Flash .bin"]
-    
-    FLASH_PRI --> REBOOT["Reboot MCU"]
-    FLASH_FALL --> REBOOT
-
-    REBOOT --> VALIDATE{"Validate Boot Partition"}
-    VALIDATE -->|App Boots & Connects| CONFIRM["esp_ota_mark_app_valid_cancel_rollback()"]
-    VALIDATE -->|Crash / Panic| ROLLBACK["Hardware Rollback to Previous Partition"]
-```
+![OTA Failover Deployment Workflow](docs/images/ota_workflow.svg)
 
 To trigger an OTA update remotely via MQTT:
 ```json
@@ -641,3 +486,76 @@ wokwi-cli firmware/cam-main/scenarios/cam-only/ --scenario test-bringup-smoke.ya
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for complete details.
+```
+
+---
+
+### Section 2: Diagram Formats, Source Codes & Output File Paths
+
+Use the following zero-install editors in your browser. Copy the code into the specified editor, download the exported **SVG**, and place it in the `docs/images/` directory.
+
+---
+
+#### 1. System Architecture Diagram
+* **Output Path:** `firmware/docs/images/system_architecture.svg`
+* **Zero-Install Editor:** [play.d2lang.com](https://play.d2lang.com) (Choose layout: **ELK**, Theme: **Dark Mauve** or **Grape**)
+* **Source Code:**
+
+```d2
+direction: down
+
+vars: {
+  d2-config: {
+    theme-id: 200
+    dark-theme-id: 200
+  }
+}
+
+pi_hub: "Pi-Hub Gateway Tier" {
+  style.fill: "#1e1e2e"
+  style.stroke: "#cba6f7"
+  mosq: "Mosquitto Broker\n(:1883 TCP)" { shape: hexagon }
+  relay: "Camera Relay Proxy\n(:8088 HTTP)" { shape: hexagon }
+}
+
+s3_node: "Node 1: ESP32-S3 Controller" {
+  style.fill: "#181825"
+  style.stroke: "#89b4fa"
+  s3_net: "TaskNetwork (Core 0)\nWiFiMulti / MQTT / Telemetry"
+  s3_aud: "TaskAudio (Core 0)\nRingBuffer DMA Consumer"
+  s3_psram: "512KB PSRAM Buffer\n(Holds ~12s Audio)" { shape: cylinder }
+  s3_mot: "TaskControl (Core 1)\n100 Hz Deterministic IK Loop"
+}
+
+cam_node: "Node 2: ESP32-CAM Node" {
+  style.fill: "#181825"
+  style.stroke: "#a6e3a1"
+  cam_net: "TaskNetwork (Core 0)\nWiFiMulti / MQTT / Telemetry"
+  cam_http: "CameraServer (Core 1)\nMJPEG Server (:81/stream)"
+}
+
+actuators: "Hardware Actuators & Transducers" {
+  style.fill: "#11111b"
+  style.stroke: "#f38ba8"
+  pca0: "PCA9685 #1 (0x40)\nRight Legs (RF, RM, RR)"
+  pca1: "PCA9685 #2 (0x41)\nLeft Legs (LR, LM, LF)"
+  i2s_dac: "MAX98357A I2S DAC\n(3W Class-D Mono)"
+  flash_led: "High-Power White LED\n(GPIO 4 PWM)"
+  ov_sensor: "OV3660 / OV2640\n(8-bit DVP Parallel)"
+}
+
+# Communications
+pi_hub.mosq <-> s3_node.s3_net: "Commands & Telemetry (MQTT)"
+pi_hub.mosq <-> cam_node.cam_net: "Controls & Telemetry (MQTT)"
+cam_node.cam_http -> pi_hub.relay: "Raw MJPEG HTTP Stream"
+
+s3_node.s3_net -> s3_node.s3_psram: "Raw 0xAA PCM Frames"
+s3_node.s3_psram -> s3_node.s3_aud: "Direct Feed"
+s3_node.s3_aud -> actuators.i2s_dac: "I2S (BCLK 40 / LRC 39 / DIN 38)"
+s3_node.s3_mot -> actuators.pca0: "400kHz Fast I2C (SDA 41 / SCL 42)"
+s3_node.s3_mot -> actuators.pca1: "400kHz Fast I2C (SDA 41 / SCL 42)"
+
+cam_node.cam_net -> actuators.flash_led: "LEDC 5kHz PWM"
+actuators.ov_sensor -> cam_node.cam_http: "DMA Parallel Pixel Bus"
+```
+
