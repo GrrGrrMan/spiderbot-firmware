@@ -1,5 +1,3 @@
----
-
 # Hexapod V2 — Dual-Node Embedded Firmware
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Core%20v6.0+-orange.svg)](https://platformio.org/)
