@@ -6,23 +6,19 @@
 !*.env.example
 !**/*.env.example
 
-# Custom Secrets & Local Overrides
-secrets.h
-**/secrets.h
-!secrets.h.example
-!**/secrets.h.example
-local_config*.h
+# ==============================================================================
+# Firmware Sensitive Configs (Keep .example files and templates)
+# ==============================================================================
+# Ignore all files in include/config
+**/include/config/*
 
-# Sensitive network and OTA token headers (Keep examples in repo)
-net_config.h
-**/net_config.h
-!net_config.h.example
-!**/net_config.h.example
+# Allow subfolders (like config.example/)
+!**/include/config/*/
 
-ota_config.h
-**/ota_config.h
-!ota_config.h.example
-!**/ota_config.h.example
+# Allow example files anywhere inside include/config
+!**/include/config/*.example
+!**/include/config/**/*.example
+!**/include/config/**/config.example/**
 
 # ==============================================================================
 # PlatformIO & Embedded Build Artifacts

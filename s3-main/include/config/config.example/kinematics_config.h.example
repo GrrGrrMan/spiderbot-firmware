@@ -13,14 +13,14 @@
 #define TIBIA_NEUTRAL_DEG  0.0f
 
 // ── Joint Angle Hardware Limits (Protection Bounds) ──────────────────────
-#define COXA_MIN_DEG   -60.0f
-#define COXA_MAX_DEG    60.0f
+#define COXA_MIN_DEG   -40.0f
+#define COXA_MAX_DEG    40.0f
 
-#define FEMUR_MIN_DEG  -75.0f
-#define FEMUR_MAX_DEG   75.0f
+#define FEMUR_MIN_DEG  -90.0f
+#define FEMUR_MAX_DEG   50.0f
 
-#define TIBIA_MIN_DEG  -80.0f
-#define TIBIA_MAX_DEG   80.0f
+#define TIBIA_MIN_DEG  -65.0f
+#define TIBIA_MAX_DEG   70.0f
 
 // ── Body Frame Layout Dimensions (in millimeters) ──────────────────────────
 #define BODY_LENGTH_MM    173.2f  // 2 * 0.866 * R
@@ -37,6 +37,6 @@
 #define MOUNT_ANGLE_LF   30.0f   // Leg 5: Left Front
 
 // ── Default Standing Stance ───────────────────────────────────────────────
-#define DEFAULT_FOOT_X   110.0f  // Neutral foot stance outward reach (mm)
-#define DEFAULT_FOOT_Y     0.0f  // Neutral foot stance lateral offset (mm)
-#define DEFAULT_FOOT_Z  -100.0f  // Neutral foot standing height (mm below hip)
+#define DEFAULT_FOOT_X   118.0f 
+#define DEFAULT_FOOT_Y     0.0f  
+#define DEFAULT_FOOT_Z  -132.0f  
