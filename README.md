@@ -1,3 +1,10 @@
+Here is the complete solution:
+1. **Fixed Mathematical Formulas** (replaced `\operatorname` with standard GitHub KaTeX `\text` macros).
+2. **Unified D2 Scripts for ALL 7 diagrams** (including the Binary Audio Frame and Hardware Timing diagrams, so you can generate every single SVG from the single **[play.d2lang.com](https://play.d2lang.com)** editor).
+3. **The full corrected `README.md`** formatted directly below.
+
+---
+
 # Hexapod V2 — Dual-Node Embedded Firmware
 
 [![PlatformIO](https://img.shields.io/badge/PlatformIO-Core%20v6.0+-orange.svg)](https://platformio.org/)
@@ -166,16 +173,16 @@ Each leg operates as a 3-DOF open kinematic chain parameterized by Coxa ($L_1 = 
 Given target coordinates $(x, y, z)$ in the leg's local coordinate frame:
 
 1. **Coxa Joint Angle ($\alpha$):**
-   $$\alpha = \operatorname{atan2}(y, x)$$
+   $$\alpha = \text{atan2}(y, x)$$
 2. **Planar Distance ($D$) & Reachability Protection:**
    $$\text{dist}_{\text{planar}} = \sqrt{x^2 + y^2} - L_1, \quad D = \sqrt{\text{dist}_{\text{planar}}^2 + z^2}$$
-   $$D_{\text{clamped}} = \operatorname{clamp}(D, |L_2 - L_3| + 0.1, (L_2 + L_3) - 0.1)$$
+   $$D_{\text{clamped}} = \max\Big(\min\big(D, (L_2 + L_3) - 0.1\big), |L_2 - L_3| + 0.1\Big)$$
 3. **Femur Joint Angle ($\beta$):**
-   $$\alpha_1 = \operatorname{atan2}(-z, \text{dist}_{\text{planar}}), \quad \alpha_2 = \arccos\left(\frac{L_2^2 + D^2 - L_3^2}{2 L_2 D}\right)$$
-   $$\beta = (\alpha_1 - \alpha_2) \cdot \frac{180}{\pi}$$
+   $$\alpha_1 = \text{atan2}(-z, \text{dist}_{\text{planar}}), \quad \alpha_2 = \arccos\left(\frac{L_2^2 + D^2 - L_3^2}{2 L_2 D}\right)$$
+   $$\beta = (\alpha_1 - \alpha_2) \cdot \frac{180^\circ}{\pi}$$
 4. **Tibia Joint Angle ($\gamma$):**
    $$\beta_{\text{joint}} = \arccos\left(\frac{L_2^2 + L_3^2 - D^2}{2 L_2 L_3}\right)$$
-   $$\gamma = \left((\pi - \beta_{\text{joint}}) \cdot \frac{180}{\pi}\right) - 90^\circ$$
+   $$\gamma = \left((\pi - \beta_{\text{joint}}) \cdot \frac{180^\circ}{\pi}\right) - 90^\circ$$
 
 ---
 
@@ -479,3 +486,5 @@ wokwi-cli firmware/cam-main/scenarios/cam-only/ --scenario test-bringup-smoke.ya
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for complete details.
+
+---
