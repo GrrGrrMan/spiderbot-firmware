@@ -1,10 +1,10 @@
 # Hexapod V2 — Dual-Node Embedded Firmware
 
-[![PlatformIO](https://img.shields.io/badge/PlatformIO-Core%20v6.0+-orange.svg)](https://platformio.org/)
-[![Framework](https://img.shields.io/badge/Framework-ESP--IDF%20%2F%20Arduino-blue.svg)](https://github.com/espressif/arduino-esp32)
-[![FreeRTOS](https://img.shields.io/badge/FreeRTOS-Symmetric%20Multiprocessing-navy.svg)](https://www.freertos.org/)
-[![Target MCU](https://img.shields.io/badge/Hardware-ESP32--S3%20%7C%20ESP32--CAM-red.svg)](https://www.espressif.com/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![PlatformIO](https://img.shields.io/badge/PlatformIO-Core%20v6.0+-18181b?style=flat-square&logo=platformio&logoColor=white)](https://platformio.org/)
+[![Framework](https://img.shields.io/badge/Framework-ESP--IDF%20%2F%20Arduino-18181b?style=flat-square&logo=espressif&logoColor=white)](https://github.com/espressif/arduino-esp32)
+[![FreeRTOS](https://img.shields.io/badge/FreeRTOS-Symmetric%20Multiprocessing-18181b?style=flat-square)](https://www.freertos.org/)
+[![Target MCU](https://img.shields.io/badge/Hardware-ESP32--S3%20%7C%20ESP32--CAM-18181b?style=flat-square)](https://www.espressif.com/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-18181b?style=flat-square)](LICENSE)
 
 The **Hexapod V2 Firmware** repository contains the embedded software powering the dual-microcontroller architecture of the Hexapod V2 robotics platform. Built with C++17 on FreeRTOS and the ESP-IDF/Arduino framework, the firmware decouples high-frequency deterministic motion control and low-latency digital audio from vision capture and remote telemetry across two cooperative ESP32 SoC nodes.
 
@@ -50,7 +50,34 @@ The **Hexapod V2 Firmware** repository contains the embedded software powering t
 
 The robotics platform divides processing across an **ESP32-S3-DevKitC-1** (responsible for real-time kinematics, servo driving, and I2S audio playback) and an **AI-Thinker ESP32-CAM** (dedicated to video acquisition and lighting). Both nodes independently discover network endpoints and the Pi-Hub MQTT broker via mDNS.
 
-![System Architecture](docs/images/system_architecture.svg)
+```mermaid
+flowchart TD
+    subgraph Gateway ["Pi-Hub Host Gateway (Raspberry Pi 4)"]
+        MQTT["Mosquitto MQTT Broker<br/>(Port 1883 / WS 9001)"]
+        MDNS["mDNS Responder<br/>(spider-w.local)"]
+        NGINX["Nginx Reverse Proxy<br/>(/cam-stream)"]
+    end
+
+    subgraph S3Node ["Motion & Audio Node (ESP32-S3)"]
+        S3_CTRL["100 Hz Kinematics Engine"]
+        S3_AUD["I2S DMA Audio (MAX98357A)"]
+        PCA0["PCA9685 Board 0 (0x40)<br/>Right Legs (9 Servos)"]
+        PCA1["PCA9685 Board 1 (0x41)<br/>Left Legs (9 Servos)"]
+        S3_CTRL --> PCA0
+        S3_CTRL --> PCA1
+    end
+
+    subgraph CamNode ["Vision Node (ESP32-CAM)"]
+        CAM_SRV["esp_http_server (:81/stream)"]
+        CAM_SENSOR["OV3660 / OV2640 DVP Sensor"]
+        FLASH["High-Power LED (GPIO 4 PWM)"]
+        CAM_SENSOR --> CAM_SRV
+    end
+
+    Gateway <-->|MQTT Telemetry & Commands| S3Node
+    Gateway <-->|MQTT Config & Telemetry| CamNode
+    CamNode -->|HTTP MJPEG Stream| NGINX
+```
 
 ---
 
@@ -58,7 +85,34 @@ The robotics platform divides processing across an **ESP32-S3-DevKitC-1** (respo
 
 To guarantee jitter-free 100 Hz kinematic execution while sustaining high-throughput network and audio pipelines, operations are partitioned across the Xtensa dual cores:
 
-![FreeRTOS Task Architecture](docs/images/task_architecture.svg)
+```mermaid
+flowchart TD
+    subgraph S3 ["ESP32-S3 Dual-Core Partitioning"]
+        subgraph S3_C0 ["Core 0 (Networking & Audio)"]
+            T_NET["TaskNetwork (Prio 2, 8KB Stack)<br/>WiFiMulti, MQTT, Logs, JSON Parser"]
+            T_AUD["TaskAudio (Prio 1, 8KB Stack)<br/>I2S DMA Driver, Q15 Scaling"]
+            PSRAM_RB[("512KB PSRAM RingBuffer")]
+            T_NET -->|Binary Audio Samples| PSRAM_RB
+            PSRAM_RB -->|PCM Pull| T_AUD
+        end
+
+        subgraph S3_C1 ["Core 1 (Deterministic Control)"]
+            T_CTRL["TaskControl (Prio 3, 4KB Stack)<br/>100 Hz IK Loop, Gait Engine, SequencePoser"]
+            T_CTRL -->|I2C Burst 400kHz| PWM["Dual PCA9685 (18 Servos)"]
+        end
+
+        T_NET <-->|Thread-Safe Queues & Atomicity| T_CTRL
+    end
+
+    subgraph CAM ["ESP32-CAM Dual-Core Partitioning"]
+        subgraph CAM_C0 ["Core 0"]
+            CAM_NET["TaskNetwork (Prio 1, 8KB Stack)<br/>Wi-Fi, MQTT State, Telemetry"]
+        end
+        subgraph CAM_C1 ["Core 1"]
+            CAM_HTTP["CameraServer (Prio 1, 8KB Stack)<br/>esp_http_server (:81/stream)"]
+        end
+    end
+```
 
 - **ESP32-S3 Core 0:**
   - `TaskNetwork` (Priority 2, 8KB stack): Manages `WiFiMulti` failover, MQTT communication, retained config handshakes, non-blocking log sink draining, and binary audio frame ingestion.
@@ -128,7 +182,21 @@ To guarantee jitter-free 100 Hz kinematic execution while sustaining high-throug
 
 The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x40`) controls the right side, and Board 2 (`0x41`, A0 jumper bridged) controls the left side.
 
-![Leg Kinematics and Coordinate Layout](docs/images/leg_kinematics.svg)
+```mermaid
+flowchart LR
+    subgraph Body ["Chassis Top-Down Layout"]
+        direction TB
+        LF["Leg 5: Left Front (LF)<br/>PCA 1 (0x41) Ch 8-10"] --- RF["Leg 0: Right Front (RF)<br/>PCA 0 (0x40) Ch 0-2"]
+        LM["Leg 4: Left Middle (LM)<br/>PCA 1 (0x41) Ch 4-6"] --- RM["Leg 1: Right Middle (RM)<br/>PCA 0 (0x40) Ch 4-6"]
+        LR["Leg 3: Left Rear (LR)<br/>PCA 1 (0x41) Ch 0-2"] --- RR["Leg 2: Right Rear (RR)<br/>PCA 0 (0x40) Ch 8-10"]
+    end
+
+    subgraph LegChain ["3-DOF Leg Joint Configuration"]
+        COXA["Coxa Joint (α)<br/>Hip Yaw (L1 = 52 mm)"] --> FEMUR["Femur Joint (β)<br/>Thigh Pitch (L2 = 66 mm)"]
+        FEMUR --> TIBIA["Tibia Joint (γ)<br/>Knee Pitch (L3 = 132 mm)"]
+        TIBIA --> FOOT["Foot Tip<br/>(x, y, z)"]
+    end
+```
 
 | Leg Index | Position | Joint | Global Ch | PCA Board | I2C Addr | Local Ch | Inverted | Phase Stagger |
 |:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -151,9 +219,29 @@ The robot employs two PCA9685 PWM drivers sharing the same I2C bus. Board 1 (`0x
 | | | Femur (Thigh) | `25` | PCA 1 | `0x41` | Ch 9 | **True** | 1350 ticks |
 | | | Tibia (Knee) | `26` | PCA 1 | `0x41` | Ch 10 | False | 1500 ticks |
 
+> [!NOTE]
 > **PWM Phase-Staggering:** To eliminate synchronized current spikes that cause logic resets, each channel's `ON` edge is offset by `ch * 150` ticks. With pulse widths up to 490 ticks, the maximum count `15 * 150 + 490 = 2740` never wraps around the 12-bit (4096-tick) counter.
 
-![Hardware Waveforms and Timing](docs/images/hardware_timing.svg)
+```mermaid
+gantt
+    title PCA9685 Staggered PWM Phase Allocation (12-bit / 4096 Ticks)
+    dateFormat X
+    axisFormat %s ticks
+    section Ch 0 (Coxa)
+    ON Phase (0 to 450)        :active, 0, 450
+    section Ch 1 (Femur)
+    ON Phase (150 to 600)      :active, 150, 600
+    section Ch 2 (Tibia)
+    ON Phase (300 to 750)      :active, 300, 750
+    section Ch 4 (Coxa)
+    ON Phase (600 to 1050)     :active, 600, 1050
+    section Ch 5 (Femur)
+    ON Phase (750 to 1200)     :active, 750, 1200
+    section Ch 6 (Tibia)
+    ON Phase (900 to 1350)     :active, 900, 1350
+    section Ch 10 (Max Offset)
+    ON Phase (1500 to 1990)    :active, 1500, 1990
+```
 
 ---
 
@@ -249,7 +337,22 @@ The `SequencePoser` interprets timeline sequences with per-segment durations and
 
 To protect servo gear trains, prevent battery brownouts, and handle network disconnects gracefully, the motion system enforces multi-layered safeguards:
 
-![Safety Watchdog State Machine](docs/images/watchdog_state.svg)
+```mermaid
+stateDiagram-v2
+    [*] --> BootState : Hardware Power On
+    BootState --> LimpMode : GPIO 13 (OE) Pulled HIGH (Outputs Disabled)
+    
+    LimpMode --> SoftStartRamp : MQTT 'power: true' Command
+    SoftStartRamp --> ActiveLocomotion : Interpolation Target Reached (1000ms)
+    
+    ActiveLocomotion --> Stage1Braked : No Heartbeat / Command (> 500ms)
+    Stage1Braked --> ActiveLocomotion : Valid Motion Command Received
+    
+    Stage1Braked --> Stage2Limp : Idle Timeout (> 5000ms)
+    Stage2Limp --> LimpMode : GPIO 13 (OE) Asserted HIGH
+    
+    ActiveLocomotion --> LimpMode : Emergency Stop / Voltage Drop
+```
 
 ---
 
@@ -259,7 +362,24 @@ To protect servo gear trains, prevent battery brownouts, and handle network disc
 
 The ESP32-S3 ingests raw PCM streaming audio directly via MQTT using an optimized 10-byte binary framed header:
 
-![Binary Audio Frame Layout](docs/images/audio_frame.svg)
+```mermaid
+flowchart LR
+    subgraph Header ["10-Byte Binary Framing Header"]
+        direction LR
+        H0["[0..1] Magic<br/><code>0xAA55</code>"]
+        H1["[2..3] Seq ID<br/><code>uint16</code>"]
+        H2["[4..5] Rate<br/><code>22050 Hz</code>"]
+        H3["[6] Ch<br/><code>1 (Mono)</code>"]
+        H4["[7] Bits<br/><code>16-bit</code>"]
+        H5["[8..9] Length<br/><code>N Bytes</code>"]
+    end
+
+    subgraph Payload ["Audio Payload Buffer"]
+        P0["[10 .. 10+N] Raw Signed 16-bit Little-Endian PCM Samples"]
+    end
+
+    Header --> Payload
+```
 
 ---
 
@@ -279,10 +399,8 @@ The ESP32-CAM hosts a dedicated `esp_http_server` instance on port 81 (`/stream`
 
 ## Directory Structure
 
-```
+```text
 firmware/
-├── docs/
-│   └── images/                    # Vector SVG architecture & timing diagrams
 ├── extra_scripts/
 │   ├── add_includes.py            # PlatformIO recursive header include script
 │   └── push_firmware.py           # Auto-MD5 generator & GitHub binary publisher
@@ -456,16 +574,12 @@ Published at 10 Hz by `s3-main` and 1 Hz by `cam-main`:
 Ensure [PlatformIO Core](https://platformio.org/install/cli) is installed, then build and flash the respective target:
 
 ```bash
-# -----------------------------------------------------------------------------
 # 1. Build and Flash ESP32-S3 (Motion & Audio Controller)
-# -----------------------------------------------------------------------------
 cd firmware/s3-main
 pio run -e esp32s3 --target upload
 pio device monitor -b 115200
 
-# -----------------------------------------------------------------------------
 # 2. Build and Flash ESP32-CAM (Vision & Flashlight Node)
-# -----------------------------------------------------------------------------
 cd firmware/cam-main
 pio run -e esp32cam --target upload
 pio device monitor -b 115200
@@ -477,7 +591,26 @@ pio device monitor -b 115200
 
 Both nodes incorporate an automated, two-tier OTA update engine with partition rollback validation:
 
-![OTA Failover Deployment Workflow](docs/images/ota_workflow.svg)
+```mermaid
+flowchart TD
+    START["Trigger OTA via MQTT<br/>(hexapod/{id}/cmd)"] --> QUERY_PRI["Query Primary Repo Manifest<br/>(GitHub / Pi-Hub HTTP)"]
+    
+    QUERY_PRI -->|Available & MD5 Valid| DOWNLOAD_PRI["Stream Binary into Next OTA Partition"]
+    QUERY_PRI -->|HTTP 404 / Network Timeout| QUERY_SEC["Query Fallback Repo Manifest"]
+    
+    QUERY_SEC -->|Available & MD5 Valid| DOWNLOAD_SEC["Stream Binary into Next OTA Partition"]
+    QUERY_SEC -->|Failed| ABORT["Abort OTA & Retain Current App"]
+    
+    DOWNLOAD_PRI --> VALIDATE["Validate Firmware MD5 Checksum"]
+    DOWNLOAD_SEC --> VALIDATE
+    
+    VALIDATE -->|Checksum Valid| SET_BOOT["esp_ota_set_boot_partition() & Reboot"]
+    VALIDATE -->|Checksum Mismatch| ABORT
+    
+    SET_BOOT --> BOOT_TEST{"Boot Self-Test &<br/>MQTT Connect"}
+    BOOT_TEST -->|Success within 10s| CONFIRM["esp_ota_mark_app_valid_cancel_rollback()"]
+    BOOT_TEST -->|Watchdog / Panic| ROLLBACK["Automatic Hardware Rollback to Previous Partition"]
+```
 
 To trigger an OTA update remotely via MQTT:
 ```json
