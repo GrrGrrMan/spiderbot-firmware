@@ -1,12 +1,8 @@
 {
 	"folders": [
 		{
-			"name": "cam-main",
-			"path": "cam-main"
-		},
-		{
-			"name": "V2",
-			"path": ".."
+			"name": "web-ui",
+			"path": "../web-ui"
 		}
 	],
 	"settings": {}

@@ -8,6 +8,10 @@
 #define DEVICE_ID "hexapod-s3-01"
 #endif
 
+// MQTT Broker Authentication (Leave empty "" if broker allows anonymous)
+#define MQTT_USER "your_mqtt_username"
+#define MQTT_PASS "your_mqtt_password"
+
 // Maximum MQTT broker fallback candidates per network profile
 #define MAX_BROKERS_PER_SSID 3
 

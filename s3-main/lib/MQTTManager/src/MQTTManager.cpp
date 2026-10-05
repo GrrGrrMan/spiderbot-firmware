@@ -93,8 +93,19 @@ void MQTTManager::reconnect(const char* brokerHost) {
 
         LOG_NET("Connecting to MQTT Broker at %s:%d as [%s]...", brokerCandidate, m_brokerPort, uniqueClientId.c_str());
 
-        // 2. Connect handshake: Only connect to verified online IPs
-        if (m_mqttClient.connect(uniqueClientId.c_str())) {
+        // 2. Connect handshake: Authenticate if credentials are provided
+        bool connectOk = false;
+#if defined(MQTT_USER) && defined(MQTT_PASS)
+        if (strlen(MQTT_USER) > 0) {
+            connectOk = m_mqttClient.connect(uniqueClientId.c_str(), MQTT_USER, MQTT_PASS);
+        } else {
+            connectOk = m_mqttClient.connect(uniqueClientId.c_str());
+        }
+#else
+        connectOk = m_mqttClient.connect(uniqueClientId.c_str());
+#endif
+
+        if (connectOk) {
             LOG_NET("MQTT Connected successfully to: %s!", brokerCandidate);
             m_mqttClient.subscribe(m_cmdTopicGlobal.c_str());
             m_mqttClient.subscribe(m_cmdTopicDevice.c_str());
