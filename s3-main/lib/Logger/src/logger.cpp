@@ -14,9 +14,11 @@ void logPrintf(const char* tag, const char* fmt, ...) {
     char fullMsg[210];
     snprintf(fullMsg, sizeof(fullMsg), "[%s] %s", tag, buffer);
 
-    // Non-blocking queue push: Core 1 motion task never blocks on UART
+    // Push to queue for MQTT, but also print to Serial directly during early boot
     if (!g_logSink.push(fullMsg)) {
-        // Fallback for early boot before task scheduler runs
+        Serial.println(fullMsg);
+    } else {
+        // Optional: mirror to Serial so logs are visible immediately
         Serial.println(fullMsg);
     }
 }

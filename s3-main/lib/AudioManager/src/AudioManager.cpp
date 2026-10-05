@@ -29,7 +29,7 @@ bool AudioManager::begin() {
     cfg.intr_alloc_flags     = ESP_INTR_FLAG_LEVEL1;
     cfg.dma_buf_count        = 8;   // 8 buffers * 512 samples = ~185ms resilient buffer
     cfg.dma_buf_len          = 512;
-    cfg.use_apll             = true;
+    cfg.use_apll             = false;
     cfg.tx_desc_auto_clear   = true;
 
     esp_err_t err = i2s_driver_install(m_port, &cfg, 0, NULL);

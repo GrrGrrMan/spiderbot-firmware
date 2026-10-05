@@ -3,6 +3,12 @@
 		{
 			"name": "web-ui",
 			"path": "../web-ui"
+		},
+		{
+			"path": "s3-main"
+		},
+		{
+			"path": "."
 		}
 	],
 	"settings": {}

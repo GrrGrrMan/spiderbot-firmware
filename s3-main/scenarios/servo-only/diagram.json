@@ -1,9 +1,19 @@
 {
   "version": 1,
-  "author": "V2 Hexapod - S3 Servo Controller Test",
+  "author": "V2 Hexapod - S3 Servo Controller Test (Fixed)",
   "editor": "wokwi",
   "parts": [
-    { "type": "board-esp32-s3-devkitc-1", "id": "esp", "top": -300, "left": 0, "attrs": {} },
+    {
+      "type": "board-esp32-s3-devkitc-1",
+      "id": "esp",
+      "top": -300,
+      "left": 0,
+      "attrs": {
+        "flashSize": "16",
+        "psramSize": "8",
+        "psramType": "octal"
+      }
+    },
     { "type": "chip-pca9685", "id": "pca1", "top": 50, "left": -250, "attrs": {} },
     { "type": "chip-pca9685", "id": "pca2", "top": 50, "left": 250, "attrs": {} },
 
@@ -34,8 +44,8 @@
     { "type": "wokwi-servo", "id": "servo_rb_f", "top": 610, "left": 550, "attrs": {} },
     { "type": "wokwi-servo", "id": "servo_rb_t", "top": 710, "left": 550, "attrs": {} },
 
-  { "type": "wokwi-text", "id": "txt1", "top": 20, "left": -230, "attrs": { "text": "Board 1 (0x40) - LEFT SIDE" } },
-  { "type": "wokwi-text", "id": "txt2", "top": 20, "left": 270, "attrs": { "text": "Board 2 (0x41) - RIGHT SIDE" } }
+    { "type": "wokwi-text", "id": "txt1", "top": 20, "left": -230, "attrs": { "text": "Board 1 (0x40) - LEFT SIDE" } },
+    { "type": "wokwi-text", "id": "txt2", "top": 20, "left": 270, "attrs": { "text": "Board 2 (0x41) - RIGHT SIDE" } }
   ],
   "connections": [
     [ "esp:TX", "$serialMonitor:RX", "", [] ],
@@ -52,6 +62,8 @@
     [ "esp:3V3", "pca2:VCC", "red", [] ],
     [ "esp:GND.1", "pca1:GND", "black", [] ],
     [ "esp:GND.1", "pca2:GND", "black", [] ],
+
+    [ "gnd1:GND", "esp:GND.1", "black", [] ],
 
     [ "pca2:A0", "pca2:VCC", "red", [] ],
 

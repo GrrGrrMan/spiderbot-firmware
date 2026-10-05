@@ -103,6 +103,10 @@ void setup() {
     audioManager.begin();
     ttsStreamer.begin();
 
+    servoManager.begin();
+    LOG_SYS("S3 Servo Manager ready");
+    motionController.begin();
+
     registerAllCommandHandlers(cmdDispatcher, servoManager, otaManager, motionController, mqttManager);
 
     mqttManager.setCommandCallback([](const String& type, JsonDocument& doc) {
@@ -203,7 +207,7 @@ void setup() {
 
     xTaskCreatePinnedToCore(TaskNetwork, "NetTask",     8192, NULL, 2, NULL, 0); // Core 0: Wi-Fi & MQTT (Priority 2)
     xTaskCreatePinnedToCore(TaskAudio,   "AudioTask",   8192, NULL, 1, NULL, 0); // Core 0: Audio DMA Streamer (Priority 1)
-    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 4096, NULL, 3, NULL, 1); // Core 1: 100% Dedicated Motion (Priority 3)
+    xTaskCreatePinnedToCore(TaskControl, "ControlTask", 8192, NULL, 3, NULL, 1); // Core 1: 100% Dedicated Motion (Priority 3)
 }
 
 void loop() {
@@ -276,19 +280,13 @@ void TaskNetwork(void *pvParameters) {
 }
 
 void TaskControl(void *pvParameters) {
-    servoManager.begin();
-    LOG_SYS("S3 Servo Manager ready");
+    LOG_SYS("S3 TaskControl running on Core 1");
 
-    motionController.begin();
-
-    // Initialize activity timer at boot
     g_lastActivityTime = millis();
-
     TickType_t xLastWakeTime = xTaskGetTickCount();
     const TickType_t xFrequency = pdMS_TO_TICKS(10);
-    
     unsigned long activeMotionStartMs = 0;
-
+    
     for (;;) {
         unsigned long now = millis();
         bool isMoving = motionController.isMoving();
